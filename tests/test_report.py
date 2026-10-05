@@ -88,3 +88,17 @@ def test_only_unit_repeats_finished_in_every_arm_count(tmp_path):
     means, _, _, _, incomplete = load_units(runs, PRICES)
     assert means[("f1", "clm")]["accuracy"] == pytest.approx(0.7)
     assert incomplete == ["f1 clm r1"]
+
+
+def test_a_unit_whose_streams_diverged_sums_its_streams(tmp_path):
+    runs = tmp_path / "runs"
+    for arm, acc, hit in ARM_ACC:
+        fake_run(runs, arm, "CR/6", "u1", "factconsolidation", acc, hit)
+        fake_run(runs, arm, "CR/2", "u1", "factconsolidation", acc, hit if arm != "clm" else 300)  # clm diverged
+    means, _, _, _, _ = load_units(runs, PRICES)
+    cost = lambda hit: call_cost(call("edit", hit), PRICES["deepseek"], "cache_hit_tokens")  # noqa: E731
+    query = call_cost(call("query", 990), PRICES["deepseek"], "cache_hit_tokens")
+    assert means[("u1", "clm")]["billed"] == pytest.approx(cost(100) + cost(300) + 2 * query)
+    assert means[("u1", "clm")]["diverged"] == 1 and means[("u1", "summary")]["diverged"] == 0
+    write_report(runs, tmp_path / "out", PRICES)
+    assert "Diverged streams (costs summed): u1 clm" in (tmp_path / "out" / "summary.md").read_text()

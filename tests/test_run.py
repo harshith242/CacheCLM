@@ -294,3 +294,19 @@ def test_a_cut_off_summary_is_logged(tmp_path):
     llm = FakeLLM(lambda t: answers(t) or ("SUMMARY", "length"))
     run_sample(sample(), "summary", 0, llm, CFG, PRICE, tmp_path)
     assert all(s["cut_off"] for s in events(tmp_path, "summary", "summary"))
+
+
+def test_a_headers_only_file_counts_as_emptied(tmp_path):
+    headers_only = "```bash\ngrep '^\\[\\[' ctx.txt > t && mv t ctx.txt\n```"
+    commands = iter(["READY", headers_only])
+    run_sample(sample(), "clm", 0, FakeLLM(lambda t: answers(t) or next(commands, "READY")), CFG, PRICE, tmp_path)
+    wiped = [e for e in events(tmp_path, "clm", "edit") if e["emptied"]]
+    assert wiped and not wiped[0]["allowed"]
+
+
+def test_fact_presence_is_only_checked_for_single_hop_facts(tmp_path):
+    mh = sample()
+    mh.source, mh.questions = "factconsolidation_mh_test", ["Which fact number is 59?", "q2"]  # matchable on sh
+    run_sample(mh, "clm", 0, FakeLLM(lambda t: answers(t) or "READY"), CFG, PRICE, tmp_path)
+    answers_logged = [r for r in read_jsonl(run_log(tmp_path, "clm", mh, 0)) if r.get("event") == "answer"]
+    assert answers_logged and all(r["gold_fact_present"] is None for r in answers_logged)

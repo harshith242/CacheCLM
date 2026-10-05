@@ -94,9 +94,13 @@ def correct(prediction, golds):
     return any(normalize_answer(g) in pred for g in golds)
 
 
+STOPWORDS = {"who", "what", "which", "where", "when", "is", "was", "are", "of", "in", "by", "to", "for", "with", "at",
+             "on", "did", "does", "do", "and", "that", "its", "his", "her"}
+
+
 def gold_fact(context, question, golds):
-    """The latest numbered fact containing a gold answer and sharing the most words with the question, or None."""
-    words = set(normalize_answer(question).split())
+    """The latest numbered fact containing a gold answer and sharing the most content words with the question, or None."""
+    words = set(normalize_answer(question).split()) - STOPWORDS
     best = None
     for line in context.splitlines():
         if re.match(r"^\d+\. ", line) and any(normalize_answer(g) in normalize_answer(line) for g in golds):

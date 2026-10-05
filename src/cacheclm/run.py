@@ -113,7 +113,8 @@ def run_sample(sample, arm, repeat, llm, cfg, price, runs_dir, question_limit=No
     predictions = answer_all(ctx, arm, fam, questions, rec, cfg)
     results = [correct(p, g) for p, g in zip(predictions, golds)]
     for qi, (p, ok) in enumerate(zip(predictions, results)):
-        fact = gold_fact(sample.context, questions[qi], golds[qi]) if fam == "factconsolidation" else None
+        single_hop = sample.source.startswith("factconsolidation_sh")  # multi-hop golds do not name the subject
+        fact = gold_fact(sample.context, questions[qi], golds[qi]) if single_hop else None
         rec.log({"event": "answer", "qi": qi, "prediction": p, "correct": ok,
                  "gold_fact_present": (fact in ctx) if fact else None})
     accuracy = sum(results) / len(results)

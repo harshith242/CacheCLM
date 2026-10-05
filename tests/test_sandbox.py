@@ -51,3 +51,8 @@ def test_multi_line_python_edit_runs():
     script = "python3 -c \"\nt = open('ctx.txt').read()\nopen('ctx.txt', 'w').write(t.replace('apple', 'pear'))\n\""
     new, out = run(script, "an apple\n")
     assert new == "an pear\n", out
+
+
+def test_python_runs_are_reproducible_so_replays_match():
+    script = "python3 -c \"print(list({'apple', 'pear', 'plum', 'fig', 'kiwi', 'lime'}))\""
+    assert len({run(script, "x\n")[1] for _ in range(4)}) == 1  # set order depends on PYTHONHASHSEED

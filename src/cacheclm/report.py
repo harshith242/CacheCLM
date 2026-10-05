@@ -74,11 +74,14 @@ def run_row(recs, prices):
 
 
 def merge(rows):
-    """One unit-arm-repeat row: streaming parts once (the unit's samples replay the same stream), questions summed."""
+    """One unit-arm-repeat row: streaming parts once when the unit's samples replayed the same stream, questions summed.
+    If the streams diverged (their costs differ), every stream is a real run, so stream costs are summed instead."""
+    diverged = len({round(r["billed_stream"], 9) for r in rows}) > 1
     out = {}
     for m in rows[0]:
         values = [r[m] for r in rows]
-        out[m] = sum(values) if m in SUMMED or m.endswith("_query") else max(values)
+        out[m] = sum(values) if m in SUMMED or m.endswith("_query") or (diverged and m.endswith("_stream")) else max(values)
+    out["diverged"] = int(diverged)
     for name in [m[:-len("_stream")] for m in rows[0] if m.endswith("_stream")]:
         out[name] = out.pop(f"{name}_stream") + out.pop(f"{name}_query")
     out["accuracy"] = out["correct"] / out["n"]
@@ -171,7 +174,9 @@ def write_report(runs_dir, out_dir, prices):
     if not units:
         raise SystemExit(f"no unit has finished runs for all four arms in {runs_dir}")
     md = ["# CacheCLM results", "", f"{len(units)} units (one per distinct text), means over repeats. "
-          f"Unpaired runs (left out): {', '.join(incomplete) or 'none'}."]
+          f"Unpaired runs (left out): {', '.join(incomplete) or 'none'}.",
+          "Diverged streams (costs summed): " + (", ".join(f"{u} {a}" for (u, a), row in sorted(data.items())
+                                                           if row["diverged"]) or "none") + "."]
     families = sorted({info[u][0] for u in units})
     for title, chosen in [("All units", units)] + [(f, [u for u in units if info[u][0] == f]) for f in families]:
         md += ["", f"## {title}", "", f"Units: {len(chosen)}.", ""] + endpoint_lines(data, chosen)

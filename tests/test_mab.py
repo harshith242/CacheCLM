@@ -52,3 +52,9 @@ def test_gold_fact_is_the_latest_matching_fact_about_the_question():
     golds = ["Martin Luther King Jr."]
     assert gold_fact(context, "Who is the author of Hard Times?", golds) == "9. The author of Hard Times is Martin Luther King Jr."
     assert gold_fact(context, "Where is Paris?", ["Lyon"]) is None
+
+
+def test_gold_fact_ignores_question_stopwords():
+    context = ("3. iPad Pro was developed by Lakshmi Mittal.\n"
+               "9. The chief executive officer of Google is Lakshmi Mittal.\n")
+    assert gold_fact(context, "Who is the developer of iPad Pro?", ["Lakshmi Mittal"]).startswith("3.")

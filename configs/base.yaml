@@ -38,11 +38,11 @@ samples:
 extra_runs:
   - {split: Conflict_Resolution, row: 6, repeat: 1}
   - {split: Conflict_Resolution, row: 2, repeat: 1}
-# Smoke runs use data that is not evaluated. FactConsolidation mh_32k (row 1) gets a 12K budget so editing is needed,
-# and all 100 questions so the gate sees a realistic turns_left. EventQA uses eventqa_full text beyond what rows 7-11 cover.
+# Smoke runs use data that is not evaluated. FactConsolidation mh_32k (row 1) gets a 16K budget so editing is needed (12K left
+# no room to keep a summary), and all 100 questions for a realistic turns_left. EventQA uses eventqa_full text beyond rows 7-11.
 smoke:
   samples:
-    - {split: Conflict_Resolution, row: 1, questions: 100, context_budget: 12000}
+    - {split: Conflict_Resolution, row: 1, questions: 100, context_budget: 16000}
     - {split: Accurate_Retrieval, row: 2, start: 285000, end: 570000, questions: 5}
   runs_dir: runs_smoke
   results_dir: results_smoke

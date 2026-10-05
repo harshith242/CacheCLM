@@ -253,3 +253,9 @@ The first smoke run (1 sample, 5 questions, $0.30) exposed two bugs and one desi
 - Reference baselines: about $0.5.
 - Smokes: about $0.4.
 - Total about $3.4-3.9, with $4.51 left under the $5 cap.
+- **FactConsolidation smoke budget is 16K, not 12K** (a final-review finding). At 12K, the kept 2 chunks plus the incoming one fill the budget, so every summary was cut away at once: in an offline simulation, 0 summaries survived and there were 7 forced truncations. At 16K, 1 summary survives with no forced truncation, and the 34K-token text is still about 2x the budget.
+- **Final-review fixes before any live run.**
+  - Sandboxed Python runs with `PYTHONHASHSEED=0`, so the same edit gives the same result and samples sharing a text replay the same stream. If their stream costs still differ, the report sums them and lists the unit as diverged.
+  - The fact error split (`gold_fact_present`) is computed for single-hop facts only, with question stopwords ignored, because multi-hop golds do not name the question's subject.
+  - An edit that leaves only header lines counts as emptied and is rolled back.
+  - Reference arms run after every primary job, so a budget stop costs references first.

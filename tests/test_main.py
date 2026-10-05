@@ -8,8 +8,8 @@ CFG = {"repeats": [0], "samples": [{"split": "A", "row": 1}, {"split": "B", "row
 
 def test_full_run_jobs_add_references_once_and_the_extra_repeat():
     planned = jobs(CFG, smoke=False)
-    assert [(s["split"], r, arms) for s, r, arms in planned] == [
-        ("A", 0, ARMS + REFERENCES), ("B", 0, ARMS + REFERENCES), ("B", 1, ARMS)]
+    assert [(s["split"], r, arms) for s, r, arms in planned] == [  # references last: a budget stop hits them first
+        ("A", 0, ARMS), ("B", 0, ARMS), ("B", 1, ARMS), ("A", 0, REFERENCES), ("B", 0, REFERENCES)]
 
 
 def test_smoke_jobs_run_the_primary_arms_only():

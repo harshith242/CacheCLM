@@ -3,7 +3,8 @@ plus the cache-aware gate. skill: clm plus a context-management skill. chat(mess
 import re
 
 from cacheclm import sandbox
-from cacheclm.ctxfile import CHARS_PER_TOKEN, block, cut_oldest_lines, next_index, normalize, split_for_summary, tokens
+from cacheclm.ctxfile import (CHARS_PER_TOKEN, HEADER, block, cut_oldest_lines, next_index, normalize,
+                              split_for_summary, tokens)
 from cacheclm.gate import decide
 
 ARMS = ("summary", "clm", "gate", "skill")
@@ -89,7 +90,7 @@ def edit_phase(task, body, arm, chat, cfg, incoming, turns_left, price, log, rep
         edits += 1
         new, output = sandbox.run(command, body)
         new = normalize(new)
-        emptied = bool(body.strip()) and not new.strip()
+        emptied = bool(body.strip()) and not HEADER.sub("", new).strip()  # headers alone hold nothing
         if emptied:
             allow, reason, numbers = False, "edit rolled back: it emptied ctx.txt", {}
         else:

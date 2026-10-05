@@ -72,7 +72,7 @@ uv run cacheclm report               # results/summary.md, summary.html, accurac
 ```
 
 **Smoke samples** use only data that is not evaluated:
-- **FactConsolidation mh_32k (row 1):** a 12K budget so editing is needed, and all 100 questions.
+- **FactConsolidation mh_32k (row 1):** a 16K budget so editing is needed, and all 100 questions.
 - **EventQA:** the `eventqa_full` text beyond what the evaluated rows cover, with 5 questions. This checks behaviour only; its accuracy is not interpreted.
 
 **Cost:**

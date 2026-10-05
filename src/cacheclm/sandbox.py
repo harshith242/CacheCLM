@@ -52,7 +52,8 @@ def run(command, ctx, timeout=10):
         (tmp / "ctx.txt").write_text(ctx)
         py = Path(sys.base_prefix).resolve()
         profile = PROFILE.format(tmp=tmp, home=Path.home().resolve(), py=py)
-        env = {"PATH": f"{py / 'bin'}:/usr/bin:/bin", "HOME": str(tmp), "LC_ALL": "en_US.UTF-8"}
+        env = {"PATH": f"{py / 'bin'}:/usr/bin:/bin", "HOME": str(tmp), "LC_ALL": "en_US.UTF-8",
+               "PYTHONHASHSEED": "0"}  # same edit, same result: samples sharing a text replay the same stream
         p = subprocess.Popen(["sandbox-exec", "-p", profile, "/bin/bash", "-c", command], cwd=tmp, env=env,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         try:
