@@ -321,3 +321,11 @@ def test_a_text_block_reaches_the_command_as_new_txt(tmp_path):
     script = lambda t: answers(t) or (next(once, "READY") if "Next part: 0 tokens" in t else "READY")  # noqa: E731
     run_sample(sample(), "skill", 0, FakeLLM(script), CFG, PRICE, tmp_path)
     assert 'Debbie said "no" and wore a green dress.' in done(tmp_path, "skill")["final_context"]
+
+
+def test_the_prompt_states_the_reply_cap_in_words_that_match_the_config():
+    import re as _re
+    import yaml
+    cap = yaml.safe_load(open("configs/base.yaml"))["edit_max_tokens"]
+    words = int(_re.search(r"cut off after about ([\d,]+) words", system("clm", 100)).group(1).replace(",", ""))
+    assert abs(words - cap * 0.75) <= cap * 0.1  # about 0.75 words per token, so the stated limit is real

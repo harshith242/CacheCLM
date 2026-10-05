@@ -20,6 +20,7 @@ How to edit:
 - The whole file is already shown to you: do not run commands that only look at it.
 - Keep the [[CTX_TURN ...]] header line of every block you keep.
 - Allowed programs: sed, awk, grep, head, tail, cat, wc, echo, printf, mv, cp, python3. No heredocs or $(...); for multi-step edits use python3 -c "..." (the script may span several lines; on this system, in-place sed is sed -i '').
+- Your reply is cut off after about 6,000 words, so plan each reply so the THOUGHT, any text block and the command fit.
 - Reply READY when you are done editing."""
 SKILL = """
 
