@@ -198,3 +198,58 @@ The first smoke run (1 sample, 5 questions, $0.30) exposed two bugs and one desi
 - **Summaries were cut off.** Each compaction hit the 8,000-token output cap (identical 33,576-character summaries) and ran 12 times in 17 chunks. The summary prompt now asks for at most 3,000 words, with a 5,000-token output cap.
 - **Scale.** The first smoke run projected about $9 for the original plan, so the samples switch to the EventQA ~70K versions (rows 7-11, the fallback above) plus both FactConsolidation 64K sets, with **1 repeat** (about $2.7), to stay under the $5 cap. With one repeat the noise measure is the per-sample spread; repeats were not used to set any threshold.
 - **The task block is no longer in `ctx.txt`.** In the second smoke run the model kept making room with line filters (keep block headers and facts with a serial number of N or above). Those filters also dropped the task sentences under the pinned header, so 30 of the CLM arm's 40 real edits were rolled back. `ctx.txt` now holds only the blocks after the task. The harness still sends the task block first in every request, so the model sees the same text and the cache prefix is unchanged, but an edit can no longer damage the task.
+
+## Revision 2: CLM improvements after an independent design review (2026-10-05)
+
+**Why.**
+- **CLM was weak, as expected.** After the two smoke runs, the zero-shot CLM arm only used crude recency edits: "drop the oldest part" or "keep facts with serial ≥ N". The paper also reports that zero-shot small models trail the summary harness, by 6 points for Qwen3.5-9B.
+- **The review found more problems.** A proposed improvement was reviewed independently (Opus). That review found harness bugs, a still-broken summary baseline, an asymmetry in the gate's feedback, and the facts that FactConsolidation rows 2 and 6 (and rows 1 and 5) share the same text. It also found that the earlier claims about where gold facts sit, and which gold facts were present, were wrong: they matched answer strings, not facts. Measured properly on sh_64k, the gold fact's position has a median of 0.69, and 31 of 100 questions have no conflicting fact.
+
+### Harness fixes
+- **Task block.** The pinned task block is kept as a separate string, and the editable text is everything after it, split by the task block's length rather than by parsing headers. Previously, an edit that left text above the first header made that text part of the "pinned" block. That text became undroppable, and forced truncation then deleted the newest chunks. This is why the second smoke run lost facts 4013-4579.
+- **Headers.** After every edit, if the editable text does not start with a `[[CTX_TURN ...]]` header, the harness adds a `notes` header. The word `pinned` is removed from any header the model writes.
+- **Forced truncation** cuts whole lines from the oldest editable text until the next part fits, instead of dropping whole blocks, which could be most of the context once headers had been deleted. Then it re-adds a header as above.
+- **An edit that empties ctx.txt** (or deletes it) is rolled back and logged as `emptied`.
+- **Logging.** The provider's `finish_reason` is logged for every call, and the edit-reply cap rises from 1,024 to 2,048 tokens. A cut-off edit reply is no longer silently read as READY: it is logged as `cut_off`. Each run's final context text is saved in its done record, so the presence of each gold fact can be checked offline.
+
+### Arm changes
+- **Summary baseline.** It asks for at most 1,500 words, with a 5,000-token cap. In the second smoke run all 6 summaries hit the cap (3,000-word target). A summary that still hits the cap is counted and reported.
+- **Gate feedback.** On an accepted edit, the gate and CLM arms both see only the command's output. The gate's reasoning is shown only when it rejects an edit. Previously the gate arm saw its cost reasoning after every edit, which the CLM arm never did.
+- **Prompt A**, the paper-faithful CLM prompt for the clm, gate and skill arms. It ports the guidance in the paper's `prompts.yaml`:
+  - write a short THOUGHT before each command;
+  - an edit makes everything after it be re-read, so prefer one large edit to many small ones, and be generous;
+  - the whole file is shown, so do not run look-only commands;
+  - keep the `[[CTX_TURN ...]]` header lines.
+
+  The clm and gate arms keep identical prompts. Note that this advice already tells the model that edits have a cache cost. The gate tests whether enforcing that cost adds anything to the advice.
+- **New 4th arm, `skill`.** It is CLM with prompt A, no gate, plus this skill text appended to its system prompt. The arm is exploratory. It uses only what the task block already states (book questions cover the whole story; newer facts override older ones). Its guidance is mostly tail-only editing, which the original spec listed as out of scope; that is stated wherever results are reported.
+
+```
+# Skill: managing your context
+## Book excerpts (questions ask which event comes next, anywhere in the story)
+- Right after a new part arrives, replace it with an event log: one line per event, in story order.
+- Each line keeps who did, said, felt or wore what, to or with whom, and where, with exact names and specific details (objects, colours, family relations).
+- Keep every older event log.
+## Numbered fact lists (newer facts override older ones)
+- When the context is nearly full, in one python3 edit: delete every fact for which a later fact has the same subject and relation; then, only if still needed, delete the oldest facts.
+```
+
+### Reference baselines (not primary endpoints)
+- **`none`:** the questions with no context. This is the floor; EventQA books are renamed classics, so some questions may be answerable from world knowledge.
+- **`full`:** the whole sample text in one prompt, with no context limit. This is the ceiling. Its cost is mostly cache hits after the first question.
+
+### Statistics
+- **FactConsolidation is one unit.** Rows 2 and 6 share their text, so their streaming phase is identical: it replays free from the disk cache, and only the question phases differ. The report treats them as one run with 200 questions.
+- **Units of analysis:** EventQA has 5 independent books. FactConsolidation has 1 text with 2 repeats (r0 and r1 on rows 6 and 2), and the second repeat measures run-to-run noise.
+- **Reporting:** results per family. Cost ratios are tested; accuracy is described, with per-sample tables. With this many units, only accuracy gaps of roughly 12-15 points or more can be detected.
+- **Offline split of FactConsolidation errors.** Using the saved final contexts, each question is classified as a retention failure (gold fact gone) or a resolution failure (gold fact present, but the model chose the older one).
+
+### Smoke runs (on data that is not evaluated)
+- **FactConsolidation:** row 1 (mh_32k), with a 12K context budget so editing is necessary, and all 100 questions so the gate's turns_left is realistic.
+- **EventQA:** row 2 (eventqa_full), the text from character 285,000 to 570,000 (beyond what rows 7-11 cover), with 5 questions. This checks behaviour only; its accuracy is not interpreted.
+
+### Cost
+- 4 arms × 6 runs + 4 arms × 1 extra FactConsolidation repeat: about $2.5-3.
+- Reference baselines: about $0.5.
+- Smokes: about $0.4.
+- Total about $3.4-3.9, with $4.51 left under the $5 cap.
