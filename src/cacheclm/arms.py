@@ -3,13 +3,13 @@ gate (clm plus the cache-aware gate). chat(messages, max_tokens, phase) -> reply
 import re
 
 from cacheclm import sandbox
-from cacheclm.ctxfile import block, drop_oldest, next_index, pinned_intact, split_for_summary, tokens
+from cacheclm.ctxfile import block, drop_oldest, next_index, split_for_summary, split_pinned, tokens
 from cacheclm.gate import decide
 
 ARMS = ("summary", "clm", "gate")
 BASE = "You are a helpful assistant that can read the context and memorize it for future retrieval."
 EDITING = """
-Your working context is the file ctx.txt, shown in each message. It holds at most {budget} tokens. Parts of a long text arrive one at a time and are appended to the end of ctx.txt. Between parts you may edit ctx.txt to keep what will matter later: delete irrelevant passages, shorten text, or keep notes in a block of your own such as [[CTX_TURN 99 role=notes]]. Never change or move the first block ([[CTX_TURN 0 role=task pinned]]).
+Your working context is shown in each message: first the task block ([[CTX_TURN 0 role=task pinned]]), which is fixed and is not in any file, then the file ctx.txt, which holds every block after it. Together they hold at most {budget} tokens. Parts of a long text arrive one at a time and are appended to the end of ctx.txt. Between parts you may edit ctx.txt to keep what will matter later: delete irrelevant passages, shorten text, or keep notes in a block of your own such as [[CTX_TURN 99 role=notes]].
 To edit, reply with exactly one shell command in a ```bash block. Allowed programs: sed, awk, grep, head, tail, cat, wc, echo, printf, mv, cp, python3. No heredocs or $(...); for multi-step edits use python3 -c "..." (the script may span several lines; on this system, in-place sed is sed -i ''). You will see the command's output. Reply READY when you are done editing."""
 SUMMARY_NOTE = "\nParts of a long text are appended to your working context. When it gets full you will be asked to compact older parts into a summary."
 SUMMARIZE = ("The working context is nearly full. Write one summary that replaces every block after the pinned task block "
@@ -60,11 +60,11 @@ def edit_phase(ctx, arm, chat, cfg, incoming, turns_left, price, log, repeat=0):
         if command is None:
             return ctx
         edits += 1
-        new, output = sandbox.run(command, ctx)
+        pinned, editable = split_pinned(ctx)
+        new_editable, output = sandbox.run(command, editable)
+        new = pinned + new_editable
         allow, reason, numbers = decide(ctx, new, turns_left, price, overflow=over)
-        if not pinned_intact(ctx, new):
-            allow, reason = False, "edit rolled back: the pinned first block must stay unchanged at the top"
-        elif arm == "clm":
+        if arm == "clm":
             allow, reason = True, "applied"
         log({"event": "edit", "command": command, "allowed": allow, "reason": reason, "over": over,
              "changed": new != ctx, "refused": output.startswith("REFUSED"), "turns_left": turns_left,

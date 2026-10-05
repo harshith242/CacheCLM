@@ -14,7 +14,7 @@ CFG = {"context_budget": 400, "chunk_tokens": 40, "max_edits_per_chunk": 3, "max
        "summary_at": 0.75, "keep_recent_chunks": 2, "summary_words": 60, "summary_max_tokens": 100,
        "nudges": [0.25, 0.5, 0.75], "query_workers": 2}
 DROP_FIRST = ("```bash\npython3 -c \"t=open('ctx.txt').read(); b=t.split('[[CTX_TURN '); "
-              "open('ctx.txt','w').write('[[CTX_TURN '.join(b[:2]+b[3:]))\"\n```")
+              "open('ctx.txt','w').write('[[CTX_TURN '.join(b[:1]+b[2:]))\"\n```")  # ctx.txt starts at the oldest part
 
 
 def sample():
@@ -72,11 +72,22 @@ def test_gate_rejects_costly_edits_but_allows_them_when_over_the_limit(tmp_path)
     assert any(e["allowed"] and "over the limit" in e["reason"] for e in edits)
 
 
-def test_damaging_the_pinned_block_is_rolled_back(tmp_path):
-    bad = "```bash\npython3 -c \"t=open('ctx.txt').read(); open('ctx.txt','w').write(t[10:])\"\n```"
-    llm = FakeLLM(lambda t: answers(t) or bad)
+KEEP_FACT_LINES = "```bash\ngrep -E '^\\[\\[|^[0-9]+\\.' ctx.txt > t && mv t ctx.txt\n```"  # drops every other line
+
+
+def test_a_line_filter_cannot_damage_the_task(tmp_path):
+    prompts = []
+
+    class Spy(FakeLLM):
+        def chat(self, messages, max_tokens, repeat):
+            prompts.append(messages[-1]["content"])
+            return super().chat(messages, max_tokens, repeat)
+
+    llm = Spy(lambda t: answers(t) or (KEEP_FACT_LINES if "OVER LIMIT" in t else "READY"))
     run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
-    assert all(not e["allowed"] and "pinned" in e["reason"] for e in events(tmp_path, "clm", "edit"))
+    edits = [e for e in events(tmp_path, "clm", "edit") if e["changed"]]
+    assert edits and all(e["allowed"] for e in edits)
+    assert all("When facts conflict" in p for p in prompts)  # the task text reaches every call
 
 
 def test_finished_run_is_skipped(tmp_path):

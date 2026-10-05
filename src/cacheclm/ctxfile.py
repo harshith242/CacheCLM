@@ -53,7 +53,7 @@ def split_for_summary(ctx, keep):
     return ctx[:head_end], ctx[head_end:tail_start], ctx[tail_start:]
 
 
-def pinned_intact(old, new):
-    """True when new still starts with old's pinned first block, unchanged."""
-    start, end = blocks(old)[0][:2]
-    return new.startswith(old[start:end])
+def split_pinned(ctx):
+    """(pinned task block, editable rest); only the rest is written to ctx.txt, so edits cannot touch the task."""
+    end = blocks(ctx)[0][1]
+    return ctx[:end], ctx[end:]

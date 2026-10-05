@@ -1,4 +1,4 @@
-from cacheclm.ctxfile import append, blocks, drop_oldest, new_context, next_index, pinned_intact, split_for_summary
+from cacheclm.ctxfile import append, blocks, drop_oldest, new_context, next_index, split_for_summary, split_pinned
 
 
 def build(n):
@@ -35,8 +35,7 @@ def test_split_for_summary_keeps_the_last_chunks():
     assert split_for_summary(build(2), keep=2) is None
 
 
-def test_pinned_block_must_stay_first_and_unchanged():
-    old = build(2)
-    assert pinned_intact(old, old.replace("part 0", "p0"))
-    assert not pinned_intact(old, old.replace("TASK", "TASK!"))
-    assert not pinned_intact(old, old[old.index("[[CTX_TURN 1"):])
+def test_only_the_blocks_after_the_task_are_editable():
+    pinned, editable = split_pinned(build(2))
+    assert pinned == new_context("TASK") and editable.startswith("[[CTX_TURN 1 role=chunk]]")
+    assert pinned + editable == build(2)
