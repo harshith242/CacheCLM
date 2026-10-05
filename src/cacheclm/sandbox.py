@@ -11,6 +11,7 @@ from pathlib import Path
 ALLOWED = {"sed", "awk", "grep", "head", "tail", "cat", "wc", "echo", "printf", "mv", "cp", "python3"}
 SEPARATORS = set(";&|\n")  # operators, and newlines outside quotes, start a new command
 MAX_OUTPUT = 2000
+MAX_CTX_CHARS = 4_000_000  # far above any budget; stops a runaway file from filling memory
 PROFILE = """(version 1)
 (allow default)
 (deny network*)
@@ -67,5 +68,6 @@ def run(command, ctx, timeout=10, files=None):
             p.communicate()
             output = f"ERROR: timed out after {timeout} s"
         path = tmp / "ctx.txt"
-        new = path.read_text(errors="replace") if path.exists() else ""
+        regular = path.is_file() and not path.is_symlink()  # a FIFO would block and a link to /dev/zero never ends
+        new = path.open(errors="replace").read(MAX_CTX_CHARS) if regular else ""
     return new, output[:MAX_OUTPUT]
