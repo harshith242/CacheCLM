@@ -42,14 +42,17 @@ def check(command):
     return None
 
 
-def run(command, ctx, timeout=10):
-    """(new ctx, output) after running the command on ctx.txt; ctx is unchanged when the command is refused."""
+def run(command, ctx, timeout=10, files=None):
+    """(new ctx, output) after running the command on ctx.txt (with any extra files beside it, e.g. new.txt);
+    ctx is unchanged when the command is refused."""
     why = check(command)
     if why:
         return ctx, f"REFUSED: {why}"
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d).resolve()
         (tmp / "ctx.txt").write_text(ctx)
+        for name, text in (files or {}).items():
+            (tmp / name).write_text(text)
         py = Path(sys.base_prefix).resolve()
         profile = PROFILE.format(tmp=tmp, home=Path.home().resolve(), py=py)
         env = {"PATH": f"{py / 'bin'}:/usr/bin:/bin", "HOME": str(tmp), "LC_ALL": "en_US.UTF-8",

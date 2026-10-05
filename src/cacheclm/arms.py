@@ -15,6 +15,7 @@ EDITING = """
 Your working context is shown in each message: first the task block ([[CTX_TURN 0 role=task pinned]]), which is fixed and is not in any file, then the file ctx.txt, which holds every block after it. Together they hold at most {budget} tokens. Parts of a long text arrive one at a time and are appended to the end of ctx.txt. Between parts you may edit ctx.txt to keep what will matter later: delete or shorten text, or keep notes in a block of your own such as [[CTX_TURN 99 role=notes]].
 How to edit:
 - Start your reply with a short THOUGHT about what to keep and why, then give exactly one shell command in a ```bash block.
+- To put new text into ctx.txt (notes, a shortened part), write it in a ```text block before the command. It is saved as new.txt beside ctx.txt, so the command can read it (for example python3 -c "...open('new.txt').read()...") with no quoting problems.
 - An edit makes everything after the edited point be re-read, so prefer one large edit over several small ones, and be generous in what you keep.
 - The whole file is already shown to you: do not run commands that only look at it.
 - Keep the [[CTX_TURN ...]] header line of every block you keep.
@@ -24,7 +25,7 @@ SKILL = """
 
 # Skill: managing your context
 ## Book excerpts (questions ask which event comes next, anywhere in the story)
-- Right after a new part arrives, replace it with an event log: one line per event, in story order.
+- Right after a new part arrives, replace it with an event log: one line per event, in story order. Do this for the newest part only, every time a part arrives; never rewrite several parts at once.
 - Each line keeps who did, said, felt or wore what, to or with whom, and where, with exact names and specific details (objects, colours, family relations).
 - Keep every older event log.
 ## Numbered fact lists (newer facts override older ones)
@@ -36,6 +37,7 @@ SUMMARIZE = ("The working context is nearly full. Write one summary that replace
              "the summary text.")
 CUT_OFF = "Your last reply was cut off before the command ended; send a shorter one."
 FENCE = re.compile(r"```(?:bash|sh)?\n(.*?)```", re.S)
+TEXT = re.compile(r"```text\n(.*?)```", re.S)
 
 
 def system(arm, budget, repeat=0):
@@ -46,9 +48,10 @@ def system(arm, budget, repeat=0):
 
 
 def parse_command(reply):
-    """The command in the reply's fenced block, or None (READY, or no complete block)."""
-    m = FENCE.search(reply or "")
-    return m.group(1).strip() if m else None
+    """The command in the reply's bash block, or None (READY, no complete block, or an empty one).
+    Text blocks are removed first, so a text block's closing fence is never read as the start of a command."""
+    m = FENCE.search(TEXT.sub("", reply or ""))
+    return (m.group(1).strip() or None) if m else None
 
 
 def control(ctx, budget, incoming, nudges, last):
@@ -88,7 +91,8 @@ def edit_phase(task, body, arm, chat, cfg, incoming, turns_left, price, log, rep
         if command is None:
             return body
         edits += 1
-        new, output = sandbox.run(command, body)
+        text = TEXT.search(reply["content"])
+        new, output = sandbox.run(command, body, files={"new.txt": text.group(1)} if text else None)
         new = normalize(new)
         emptied = bool(body.strip()) and not HEADER.sub("", new).strip()  # headers alone hold nothing
         if emptied:

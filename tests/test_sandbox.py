@@ -56,3 +56,8 @@ def test_multi_line_python_edit_runs():
 def test_python_runs_are_reproducible_so_replays_match():
     script = "python3 -c \"print(list({'apple', 'pear', 'plum', 'fig', 'kiwi', 'lime'}))\""
     assert len({run(script, "x\n")[1] for _ in range(4)}) == 1  # set order depends on PYTHONHASHSEED
+
+
+def test_extra_files_are_written_next_to_ctx():
+    new, out = run("cat new.txt > ctx.txt", "old\n", files={"new.txt": "It's \"quoted\" text\n"})
+    assert new == "It's \"quoted\" text\n", out

@@ -46,6 +46,7 @@ def events(tmp_path, arm, name):
 def test_parse_command_and_control_note():
     assert parse_command("READY") is None
     assert parse_command("```bash\ncat ctx.txt\n```") == "cat ctx.txt"
+    assert parse_command("```text\nnote\n```\n```bash\ncat new.txt\n```") == "cat new.txt"
     assert "OVER LIMIT" in control("x" * 760, 200, 40, [0.25], "")
 
 
@@ -310,3 +311,13 @@ def test_fact_presence_is_only_checked_for_single_hop_facts(tmp_path):
     run_sample(mh, "clm", 0, FakeLLM(lambda t: answers(t) or "READY"), CFG, PRICE, tmp_path)
     answers_logged = [r for r in read_jsonl(run_log(tmp_path, "clm", mh, 0)) if r.get("event") == "answer"]
     assert answers_logged and all(r["gold_fact_present"] is None for r in answers_logged)
+
+
+def test_a_text_block_reaches_the_command_as_new_txt(tmp_path):
+    reply = ("THOUGHT: log the newest part.\n```text\nDebbie said \"no\" and wore a green dress.\n```\n"
+             "```bash\npython3 -c \"t=open('ctx.txt').read(); i=t.rindex('[[CTX_TURN'); "
+             "h=t[i:].split(chr(10))[0]; open('ctx.txt','w').write(t[:i]+h+chr(10)+open('new.txt').read())\"\n```")
+    once = iter([reply])  # in the final edit phase, so no later truncation can cut the new text
+    script = lambda t: answers(t) or (next(once, "READY") if "Next part: 0 tokens" in t else "READY")  # noqa: E731
+    run_sample(sample(), "skill", 0, FakeLLM(script), CFG, PRICE, tmp_path)
+    assert 'Debbie said "no" and wore a green dress.' in done(tmp_path, "skill")["final_context"]
