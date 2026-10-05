@@ -11,6 +11,8 @@ from cacheclm.ctxfile import CHARS_PER_TOKEN, append, new_context, tokens
 from cacheclm.files import append_jsonl, read_jsonl
 from cacheclm.mab import MEMORIZE, QUERY, TASK, chunk_text, correct, family
 
+ANSWER_NOTE = "Editing is over. Answer the question below in plain text; do not reply READY or with a command."
+
 
 def run_log(runs_dir, arm, sample, repeat):
     return Path(runs_dir) / arm / f"{sample.sid.replace('/', '_')}_r{repeat}.jsonl"
@@ -50,7 +52,7 @@ def answer_all(ctx, arm, fam, questions, rec, cfg, serial_max=3):
 
     def ask(q, ref):
         messages = [{"role": "system", "content": head},
-                    {"role": "user", "content": ctx + "\n\n" + QUERY[fam].format(question=q)}]
+                    {"role": "user", "content": ctx + "\n\n" + ANSWER_NOTE + "\n\n" + QUERY[fam].format(question=q)}]
         return rec.chat(messages, 256, "query", ref=ref)
 
     replies = [ask(questions[0], None)]

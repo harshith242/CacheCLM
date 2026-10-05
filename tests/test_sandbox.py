@@ -12,7 +12,8 @@ def test_allow_list_and_shape_checks():
     assert "not allowed" in check("curl example.com")
     assert "not allowed" in check("cat ctx.txt | nc host 1")
     assert "heredoc" in check("python3 - <<EOF\nprint(1)\nEOF")
-    assert "one line" in check("cat ctx.txt\nrm ctx.txt")
+    assert check("python3 -c \"\nt=open('ctx.txt').read()\nopen('ctx.txt','w').write(t[:10])\n\"") is None
+    assert "not allowed" in check("cat ctx.txt\nrm ctx.txt")  # a second command on the next line is still checked
 
 
 def test_edit_runs_on_ctx():
@@ -44,3 +45,9 @@ def test_timeout_kills_the_whole_pipeline():
     time.sleep(0.5)
     left = subprocess.run(["pgrep", "-f", "31.73"], capture_output=True, text=True).stdout
     assert left == ""
+
+
+def test_multi_line_python_edit_runs():
+    script = "python3 -c \"\nt = open('ctx.txt').read()\nopen('ctx.txt', 'w').write(t.replace('apple', 'pear'))\n\""
+    new, out = run(script, "an apple\n")
+    assert new == "an pear\n", out

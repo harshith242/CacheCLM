@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 ALLOWED = {"sed", "awk", "grep", "head", "tail", "cat", "wc", "echo", "printf", "mv", "cp", "python3"}
-OPERATORS = {"|", "||", "&&", ";", "&"}
+SEPARATORS = set(";&|\n")  # operators, and newlines outside quotes, start a new command
 MAX_OUTPUT = 2000
 PROFILE = """(version 1)
 (allow default)
@@ -25,17 +25,15 @@ def check(command):
     """Why the command may not run, or None."""
     if "<<" in command or "$(" in command or "`" in command:
         return "no heredocs or subshells; use python3 -c '...' instead"
-    if "\n" in command:
-        return "one line only; use python3 -c '...' for multi-step edits"
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
-        lexer.whitespace_split = True
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|\n")
+        lexer.whitespace, lexer.whitespace_split = " \t\r", True
         words = list(lexer)
     except ValueError as e:
         return f"cannot parse the command: {e}"
     start = True
     for word in words:
-        if word in OPERATORS:
+        if word and set(word) <= SEPARATORS:
             start = True
         elif start:
             if word not in ALLOWED:

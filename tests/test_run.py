@@ -184,3 +184,16 @@ def test_a_budget_stop_leaves_the_run_resumable(tmp_path):
     with pytest.raises(BudgetExceeded):
         run_sample(sample(), "clm", 0, Broke(lambda t: answers(t) or "READY"), CFG, PRICE, tmp_path)
     assert not events(tmp_path, "clm", "done")  # so the next run redoes this sample instead of skipping it
+
+
+def test_questions_tell_the_model_that_editing_is_over(tmp_path):
+    asked = []
+
+    class Spy(FakeLLM):
+        def chat(self, messages, max_tokens, repeat):
+            if "Question:" in messages[-1]["content"]:
+                asked.append(messages[-1]["content"])
+            return super().chat(messages, max_tokens, repeat)
+
+    run_sample(sample(), "clm", 0, Spy(lambda t: answers(t) or "READY"), CFG, PRICE, tmp_path)
+    assert asked and all("Editing is over" in q for q in asked)

@@ -10,7 +10,7 @@ ARMS = ("summary", "clm", "gate")
 BASE = "You are a helpful assistant that can read the context and memorize it for future retrieval."
 EDITING = """
 Your working context is the file ctx.txt, shown in each message. It holds at most {budget} tokens. Parts of a long text arrive one at a time and are appended to the end of ctx.txt. Between parts you may edit ctx.txt to keep what will matter later: delete irrelevant passages, shorten text, or keep notes in a block of your own such as [[CTX_TURN 99 role=notes]]. Never change or move the first block ([[CTX_TURN 0 role=task pinned]]).
-To edit, reply with exactly one shell command in a ```bash block. Allowed programs: sed, awk, grep, head, tail, cat, wc, echo, printf, mv, cp, python3. One line only, no heredocs; use python3 -c '...' for multi-step edits (on this system, in-place sed is sed -i ''). You will see the command's output. Reply READY when you are done editing."""
+To edit, reply with exactly one shell command in a ```bash block. Allowed programs: sed, awk, grep, head, tail, cat, wc, echo, printf, mv, cp, python3. No heredocs or $(...); for multi-step edits use python3 -c "..." (the script may span several lines; on this system, in-place sed is sed -i ''). You will see the command's output. Reply READY when you are done editing."""
 SUMMARY_NOTE = "\nParts of a long text are appended to your working context. When it gets full you will be asked to compact older parts into a summary."
 SUMMARIZE = ("The working context is nearly full. Write one summary that replaces every block after the pinned task block "
              "and before the last {keep} parts. Keep every detail that may be needed to answer later questions: names, "
