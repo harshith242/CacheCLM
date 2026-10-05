@@ -13,8 +13,9 @@ Your working context is the file ctx.txt, shown in each message. It holds at mos
 To edit, reply with exactly one shell command in a ```bash block. Allowed programs: sed, awk, grep, head, tail, cat, wc, echo, printf, mv, cp, python3. No heredocs or $(...); for multi-step edits use python3 -c "..." (the script may span several lines; on this system, in-place sed is sed -i ''). You will see the command's output. Reply READY when you are done editing."""
 SUMMARY_NOTE = "\nParts of a long text are appended to your working context. When it gets full you will be asked to compact older parts into a summary."
 SUMMARIZE = ("The working context is nearly full. Write one summary that replaces every block after the pinned task block "
-             "and before the last {keep} parts. Keep every detail that may be needed to answer later questions: names, "
-             "events in story order, and facts with their serial numbers. Reply with only the summary text.")
+             "and before the last {keep} parts, in at most {words:,} words. Keep the details most likely to be needed "
+             "for later questions: names, events in story order, and facts with their serial numbers. Reply with only "
+             "the summary text.")
 FENCE = re.compile(r"```(?:bash|sh)?\n(.*?)```", re.S)
 
 
@@ -82,10 +83,10 @@ def summary_step(ctx, chat, cfg, incoming, log, repeat=0):
     if parts is None:
         return ctx
     head, middle, tail = parts
-    prompt = SUMMARIZE.format(keep=cfg["keep_recent_chunks"])
+    prompt = SUMMARIZE.format(keep=cfg["keep_recent_chunks"], words=cfg["summary_words"])
     messages = [{"role": "system", "content": system("summary", budget, repeat)},
                 {"role": "user", "content": ctx + "\n\n" + prompt}]
-    summary = chat(messages, budget // 4, "summary")["content"]
+    summary = chat(messages, cfg["summary_max_tokens"], "summary")["content"]
     log({"event": "summary", "chars_before": len(ctx), "chars_compacted": len(middle), "summary_chars": len(summary)})
     return head + block(next_index(ctx), "summary", summary) + tail
 

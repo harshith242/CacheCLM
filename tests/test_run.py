@@ -11,7 +11,8 @@ from cacheclm.run import Recorder, answer_all, run_log, run_sample
 
 PRICE = {"cache_read": 0.006, "cache_write": 0.30, "output": 1.20}
 CFG = {"context_budget": 400, "chunk_tokens": 40, "max_edits_per_chunk": 3, "max_condense_tries": 3,
-       "summary_at": 0.75, "keep_recent_chunks": 2, "nudges": [0.25, 0.5, 0.75], "query_workers": 2}
+       "summary_at": 0.75, "keep_recent_chunks": 2, "summary_words": 60, "summary_max_tokens": 100,
+       "nudges": [0.25, 0.5, 0.75], "query_workers": 2}
 DROP_FIRST = ("```bash\npython3 -c \"t=open('ctx.txt').read(); b=t.split('[[CTX_TURN '); "
               "open('ctx.txt','w').write('[[CTX_TURN '.join(b[:2]+b[3:]))\"\n```")
 
@@ -197,3 +198,16 @@ def test_questions_tell_the_model_that_editing_is_over(tmp_path):
 
     run_sample(sample(), "clm", 0, Spy(lambda t: answers(t) or "READY"), CFG, PRICE, tmp_path)
     assert asked and all("Editing is over" in q for q in asked)
+
+
+def test_summary_asks_for_a_length_it_can_finish(tmp_path):
+    seen = []
+
+    class Spy(FakeLLM):
+        def chat(self, messages, max_tokens, repeat):
+            if "Write one summary" in messages[-1]["content"]:
+                seen.append((max_tokens, messages[-1]["content"]))
+            return super().chat(messages, max_tokens, repeat)
+
+    run_sample(sample(), "summary", 0, Spy(lambda t: answers(t) or "SUMMARY"), CFG, PRICE, tmp_path)
+    assert seen and all(m == 100 and "at most 60 words" in text for m, text in seen)

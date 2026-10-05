@@ -188,3 +188,12 @@ The user runs both in their own terminal, from a command handed over. Live runs 
 
 - Context Language Models (arXiv 2609.37725) for the method and the context-file format. Its repository is CC BY-NC 4.0, so no code is copied.
 - MemoryAgentBench (arXiv 2507.05257) for the data.
+
+## Changes after the first smoke run (2026-10-05)
+
+The first smoke run (1 sample, 5 questions, $0.30) exposed two bugs and one design problem. All were fixed before any full run.
+
+- **CLM edits were refused.** The model writes multi-line `python3 -c "..."` scripts, and the "one line only" rule refused 129 of 140 commands, so both CLM arms were truncated, not edited. Newlines inside quotes are now allowed; a newline outside quotes still starts a new command that must be on the allow-list.
+- **CLM answered questions with "READY".** Every question message now starts with "Editing is over. Answer the question below in plain text…", the same text for all arms.
+- **Summaries were cut off.** Each compaction hit the 8,000-token output cap (identical 33,576-character summaries) and ran 12 times in 17 chunks. The summary prompt now asks for at most 3,000 words, with a 5,000-token output cap.
+- **Scale.** The first smoke run projected about $9 for the original plan, so the samples switch to the EventQA ~70K versions (rows 7-11, the fallback above) plus both FactConsolidation 64K sets, with **1 repeat** (about $2.7), to stay under the $5 cap. With one repeat the noise measure is the per-sample spread; repeats were not used to set any threshold.

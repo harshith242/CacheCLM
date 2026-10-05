@@ -9,11 +9,13 @@ budget_usd: 5.0
 context_budget: 32000       # tokens, as in the paper
 chunk_tokens: 4000
 temperature: 0.3
-repeats: [0, 1]
+repeats: [0]                # 1 repeat to stay under the $5 cap (decided after the first smoke run)
 max_edits_per_chunk: 3
 max_condense_tries: 3
 summary_at: 0.75
 keep_recent_chunks: 2
+summary_words: 3000         # target length; ~4K tokens, so it finishes well before the output cap
+summary_max_tokens: 5000
 nudges: [0.25, 0.5, 0.75]
 query_workers: 8
 agent:
@@ -21,13 +23,14 @@ agent:
   base_url: https://api.deepseek.com
   api_key_env: DEEPSEEK_API_KEY
   options: {extra_body: {thinking: {type: disabled}}}
-# Chosen by length before any run: the 5 EventQA books at ~140K tokens and both FactConsolidation 64K sets.
+# The 5 EventQA books at ~70K tokens (the spec's fallback, chosen after the first smoke run projected ~$9 for the
+# ~140K versions) and both FactConsolidation 64K sets.
 samples:
-  - {split: Accurate_Retrieval, row: 12}
-  - {split: Accurate_Retrieval, row: 13}
-  - {split: Accurate_Retrieval, row: 14}
-  - {split: Accurate_Retrieval, row: 15}
-  - {split: Accurate_Retrieval, row: 16}
+  - {split: Accurate_Retrieval, row: 7}
+  - {split: Accurate_Retrieval, row: 8}
+  - {split: Accurate_Retrieval, row: 9}
+  - {split: Accurate_Retrieval, row: 10}
+  - {split: Accurate_Retrieval, row: 11}
   - {split: Conflict_Resolution, row: 2}
   - {split: Conflict_Resolution, row: 6}
 smoke:
