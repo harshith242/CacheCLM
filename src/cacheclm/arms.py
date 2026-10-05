@@ -18,8 +18,9 @@ SUMMARIZE = ("The working context is nearly full. Write one summary that replace
 FENCE = re.compile(r"```(?:bash|sh)?\n(.*?)```", re.S)
 
 
-def system(arm, budget):
-    return BASE + (SUMMARY_NOTE if arm == "summary" else EDITING.format(budget=budget))
+def system(arm, budget, repeat=0):
+    """The arm's fixed system prompt; the first line keeps repeats from sharing the provider's prompt cache."""
+    return f"Run r{repeat}.\n" + BASE + (SUMMARY_NOTE if arm == "summary" else EDITING.format(budget=budget))
 
 
 def parse_command(reply):
@@ -44,7 +45,7 @@ def control(ctx, budget, incoming, nudges, last):
     return "\n".join(lines)
 
 
-def edit_phase(ctx, arm, chat, cfg, incoming, turns_left, price, log):
+def edit_phase(ctx, arm, chat, cfg, incoming, turns_left, price, log, repeat=0):
     """ctx after up to max_edits commands, plus up to max_condense more while the next part would not fit."""
     budget, last, edits = cfg["context_budget"], "", 0
     while True:
@@ -52,7 +53,8 @@ def edit_phase(ctx, arm, chat, cfg, incoming, turns_left, price, log):
         if edits >= cfg["max_edits_per_chunk"] + (cfg["max_condense_tries"] if over else 0):
             return ctx
         note = control(ctx, budget, incoming, cfg["nudges"], last)
-        messages = [{"role": "system", "content": system(arm, budget)}, {"role": "user", "content": ctx + "\n\n" + note}]
+        messages = [{"role": "system", "content": system(arm, budget, repeat)},
+                    {"role": "user", "content": ctx + "\n\n" + note}]
         command = parse_command(chat(messages, 1024, "edit")["content"])
         if command is None:
             return ctx
@@ -64,13 +66,14 @@ def edit_phase(ctx, arm, chat, cfg, incoming, turns_left, price, log):
         elif arm == "clm":
             allow, reason = True, "applied"
         log({"event": "edit", "command": command, "allowed": allow, "reason": reason, "over": over,
-             "turns_left": turns_left, "chars_before": len(ctx), "chars_after": len(new), **numbers})
+             "changed": new != ctx, "refused": output.startswith("REFUSED"), "turns_left": turns_left,
+             "chars_before": len(ctx), "chars_after": len(new), **numbers})
         if allow:
             ctx = new
         last = f"{output}\n{reason}".strip()
 
 
-def summary_step(ctx, chat, cfg, incoming, log):
+def summary_step(ctx, chat, cfg, incoming, log, repeat=0):
     """ctx with older blocks compacted into one summary once ctx plus the next part passes summary_at of the budget."""
     budget = cfg["context_budget"]
     if tokens(ctx) + incoming <= cfg["summary_at"] * budget:
@@ -80,7 +83,7 @@ def summary_step(ctx, chat, cfg, incoming, log):
         return ctx
     head, middle, tail = parts
     prompt = SUMMARIZE.format(keep=cfg["keep_recent_chunks"])
-    messages = [{"role": "system", "content": system("summary", budget)},
+    messages = [{"role": "system", "content": system("summary", budget, repeat)},
                 {"role": "user", "content": ctx + "\n\n" + prompt}]
     summary = chat(messages, budget // 4, "summary")["content"]
     log({"event": "summary", "chars_before": len(ctx), "chars_compacted": len(middle), "summary_chars": len(summary)})

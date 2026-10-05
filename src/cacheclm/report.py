@@ -35,7 +35,7 @@ def paired(diffs, iters=10000, seed=0):
 def kept_share(s, c, g, iters=10000, seed=0):
     """(share, CI low, high) of CLM's accuracy gain over summary that the gate keeps; None if CLM gains under 1 point."""
     s, c, g = (np.asarray(x, dtype=float) for x in (s, c, g))
-    if abs(c.mean() - s.mean()) < 0.01:
+    if c.mean() - s.mean() < 0.01:  # no CLM gain (or a loss): nothing for the gate to keep
         return None
     idx = np.random.default_rng(seed).integers(0, len(s), (iters, len(s)))
     gain = c[idx].mean(axis=1) - s[idx].mean(axis=1)
@@ -46,33 +46,38 @@ def kept_share(s, c, g, iters=10000, seed=0):
 
 
 def load_runs(runs_dir, prices):
-    """{(sample, arm): metric means over repeats} from finished runs, plus edit examples from the gate arm."""
-    table, examples = defaultdict(lambda: defaultdict(list)), []
+    """({(sample, arm): metric means over repeats}, gate edit examples, incomplete runs). Only (sample, repeat) pairs
+    finished in all three arms count, and an edit counts only if it changed the context."""
+    runs, examples = {}, []
     for path in sorted(Path(runs_dir).glob("*/*.jsonl")):
         recs = read_jsonl(path)
         done = [r for r in recs if r.get("event") == "done"]
         if not done:
             continue
+        d = done[-1]
         calls = [r for r in recs if r.get("event") == "call"]
-        edits = [r for r in recs if r.get("event") == "edit"]
-        row = table[(done[-1]["sample"], done[-1]["arm"])]
-        row["accuracy"].append(done[-1]["accuracy"])
-        row["correct"].append(done[-1]["accuracy"] * done[-1]["n_questions"])
-        row["billed"].append(sum(call_cost(c, prices["deepseek"], "cache_hit_tokens") for c in calls))
+        edits = [r for r in recs if r.get("event") == "edit" and r.get("changed", True)]
+        row = {"accuracy": d["accuracy"], "correct": d["accuracy"] * d["n_questions"],
+               "billed": sum(call_cost(c, prices["deepseek"], "cache_hit_tokens") for c in calls),
+               "edits": len(edits), "rejected": sum(not e["allowed"] for e in edits),
+               "rebilled": sum(e.get("rebilled_tokens", 0) for e in edits if e["allowed"]),
+               "forced": sum(r.get("event") == "forced_truncation" for r in recs),
+               "prompt": sum(c["prompt_tokens"] for c in calls), "hit": sum(c["cache_hit_tokens"] for c in calls),
+               "latency": sum(c["latency_s"] for c in calls), "ideal": sum(c["ideal_hit_tokens"] for c in calls)}
         for name, price in prices.items():
-            row[name].append(sum(call_cost(c, price, "ideal_hit_tokens") for c in calls))
-        row["edits"].append(len(edits))
-        row["rejected"].append(sum(not e["allowed"] for e in edits))
-        row["rebilled"].append(sum(e.get("rebilled_tokens", 0) for e in edits if e["allowed"]))
-        row["forced"].append(sum(r.get("event") == "forced_truncation" for r in recs))
-        row["prompt"].append(sum(c["prompt_tokens"] for c in calls))
-        row["hit"].append(sum(c["cache_hit_tokens"] for c in calls))
-        row["latency"].append(sum(c["latency_s"] for c in calls))
-        row["ideal"].append(sum(c["ideal_hit_tokens"] for c in calls))
-        if done[-1]["arm"] == "gate":
+            row[name] = sum(call_cost(c, price, "ideal_hit_tokens") for c in calls)
+        runs[(d["sample"], d["arm"], d["repeat"])] = row
+        if d["arm"] == "gate":
             examples += edits
+    complete = {(s, r) for s, _, r in runs if all((s, a, r) in runs for a in ARMS)}
+    table = defaultdict(lambda: defaultdict(list))
+    for (s, a, r), row in runs.items():
+        if (s, r) in complete:
+            for m, v in row.items():
+                table[(s, a)][m].append(v)
+    incomplete = sorted(f"{s} {a} r{r}" for s, a, r in runs if (s, r) not in complete)
     means = {k: {m: float(np.mean(v)) for m, v in row.items()} for k, row in table.items()}
-    return means, examples
+    return means, examples, incomplete
 
 
 def endpoint_lines(data, samples):
@@ -112,12 +117,11 @@ def chart(data, samples, prices, path):
 def write_report(runs_dir, out_dir, prices):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    data, examples = load_runs(runs_dir, prices)
+    data, examples, incomplete = load_runs(runs_dir, prices)
     samples = sorted({s for s, _ in data if all((s, a) in data for a in ARMS)})
     if not samples:
         raise SystemExit(f"no sample has finished runs for all three arms in {runs_dir}")
-    incomplete = sorted({s for s, _ in data} - set(samples))
-    md = ["# CacheCLM results", "", f"{len(samples)} samples, means over repeats. Incomplete samples (left out): "
+    md = ["# CacheCLM results", "", f"{len(samples)} samples, means over repeats. Unpaired runs (left out): "
           f"{', '.join(incomplete) or 'none'}.", "", "## Primary endpoints", ""]
     md += endpoint_lines(data, samples)
     md += ["", "## Per arm", "", "| Arm | Accuracy | Billed $ | $ per correct | Edits | Rejected | Re-billed tokens | "

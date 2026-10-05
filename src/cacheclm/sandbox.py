@@ -1,6 +1,8 @@
 """Runs one model-written shell command on ctx.txt in a temp folder: allow-listed programs, macOS sandbox-exec jail
 (no network, no writes outside the folder, no home-folder reads except Python), 10 s timeout, 2K characters of output."""
+import os
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -53,11 +55,14 @@ def run(command, ctx, timeout=10):
         py = Path(sys.base_prefix).resolve()
         profile = PROFILE.format(tmp=tmp, home=Path.home().resolve(), py=py)
         env = {"PATH": f"{py / 'bin'}:/usr/bin:/bin", "HOME": str(tmp), "LC_ALL": "en_US.UTF-8"}
+        p = subprocess.Popen(["sandbox-exec", "-p", profile, "/bin/bash", "-c", command], cwd=tmp, env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         try:
-            p = subprocess.run(["sandbox-exec", "-p", profile, "/bin/bash", "-c", command], cwd=tmp, env=env,
-                               capture_output=True, text=True, timeout=timeout)
-            output = p.stdout + p.stderr
+            out, err = p.communicate(timeout=timeout)
+            output = out + err
         except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)  # the whole process group, so pipeline children die too
+            p.communicate()
             output = f"ERROR: timed out after {timeout} s"
         path = tmp / "ctx.txt"
         new = path.read_text(errors="replace") if path.exists() else ""

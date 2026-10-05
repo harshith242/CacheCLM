@@ -30,8 +30,9 @@ class Recorder:
         text = "".join(m["content"] for m in messages)
         reference = self.ref if ref is None else ref
         estimate = len(text) // CHARS_PER_TOKEN  # logged next to billed prompt_tokens to measure the estimate's gap
-        ideal = len(os.path.commonprefix([reference, text])) // CHARS_PER_TOKEN
+        shared = len(os.path.commonprefix([reference, text]))
         reply = self.llm.chat(messages, max_tokens, self.repeat)
+        ideal = round(reply["prompt_tokens"] * shared / len(text)) if text else 0  # shared share, in billed tokens
         if ref is None:
             self.ref = text
         self.log({"event": "call", "phase": phase, "model": reply["model"], "date": datetime.date.today().isoformat(),
@@ -42,18 +43,23 @@ class Recorder:
         return reply
 
 
-def answer_all(ctx, arm, fam, questions, rec, cfg):
-    """Each question in its own call on the frozen context; the first call warms the provider cache."""
-    head = system(arm, cfg["context_budget"])
+def answer_all(ctx, arm, fam, questions, rec, cfg, serial_max=3):
+    """Each question in its own call on the frozen context. The first is compared with the real previous request;
+    questions go one at a time until the provider reports a cache hit (at most serial_max), then in parallel."""
+    head = system(arm, cfg["context_budget"], rec.repeat)
 
-    def ask(q):
+    def ask(q, ref):
         messages = [{"role": "system", "content": head},
                     {"role": "user", "content": ctx + "\n\n" + QUERY[fam].format(question=q)}]
-        return rec.chat(messages, 256, "query", ref=head + ctx)["content"]
+        return rec.chat(messages, 256, "query", ref=ref)
 
-    first = [ask(questions[0])]
+    replies = [ask(questions[0], None)]
+    while len(replies) < min(serial_max, len(questions)) and not (replies[-1]["cache_hit_tokens"] or
+                                                                  replies[-1]["cached"]):
+        replies.append(ask(questions[len(replies)], head + ctx))
     with ThreadPoolExecutor(cfg["query_workers"]) as pool:
-        return first + list(pool.map(ask, questions[1:]))
+        replies += list(pool.map(lambda q: ask(q, head + ctx), questions[len(replies):]))
+    return [r["content"] for r in replies]
 
 
 def run_sample(sample, arm, repeat, llm, cfg, price, runs_dir, question_limit=None):
@@ -75,9 +81,9 @@ def run_sample(sample, arm, repeat, llm, cfg, price, runs_dir, question_limit=No
         turns_left = len(chunks) - i + len(questions)
         if arm == "summary":
             if chunk is not None:
-                ctx = summary_step(ctx, rec.chat, cfg, incoming, rec.log)
+                ctx = summary_step(ctx, rec.chat, cfg, incoming, rec.log, repeat)
         else:
-            ctx = edit_phase(ctx, arm, rec.chat, cfg, incoming, turns_left, price, rec.log)
+            ctx = edit_phase(ctx, arm, rec.chat, cfg, incoming, turns_left, price, rec.log, repeat)
         ctx = fit(ctx, incoming, budget, rec.log)
         if chunk is not None:
             ctx = append(ctx, "chunk", text)

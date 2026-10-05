@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import httpx2 as httpx  # the HTTP client this openai version uses
+import openai
 import pytest
 
 from cacheclm.budget import Budget, BudgetExceeded
@@ -42,3 +44,31 @@ def test_budget_persists_and_stops_past_the_cap(tmp_path):
     assert Budget(tmp_path / "spend.json", 1.0).total == pytest.approx(0.6)
     with pytest.raises(BudgetExceeded):
         budget.spend(0.5)
+
+
+class ErrorClient(FakeClient):
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+    def create(self, **kw):
+        self.calls += 1
+        raise self.error
+
+
+def status_error(cls, code):
+    return cls("boom", response=httpx.Response(code, request=httpx.Request("POST", "https://x")), body=None)
+
+
+def test_a_rejected_request_fails_this_sample_only(tmp_path):
+    client = ErrorClient(status_error(openai.BadRequestError, 400))
+    llm = LLM("m", client, tmp_path, 0.3, PRICE)
+    with pytest.raises(RuntimeError, match="400"):
+        llm.chat([{"role": "user", "content": "q"}], 8, 0)
+    assert client.calls == 1  # not retried
+
+
+def test_auth_errors_still_stop_the_run(tmp_path):
+    llm = LLM("m", ErrorClient(status_error(openai.AuthenticationError, 401)), tmp_path, 0.3, PRICE)
+    with pytest.raises(openai.AuthenticationError):
+        llm.chat([{"role": "user", "content": "q"}], 8, 0)

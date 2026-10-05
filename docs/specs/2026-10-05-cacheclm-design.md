@@ -40,6 +40,7 @@ Out of scope: RL training, Suffix Cache Reuse itself, multi-agent swarms, tail-o
 All three arms share the model, the chunks, the pinned task block, the questions and the 32K budget.
 - The CLM and gate arms use the identical system prompt. The gate is invisible until it rejects an edit.
 - The summary arm's system prompt leaves out the editing instructions.
+- Every system prompt starts with `Run r{repeat}.` (added after the final code review). Without it, repeat 1 would send byte-identical requests to repeat 0 and get provider cache hits that repeat 0 paid for, biasing billed dollars by arm. CLM and gate stay identical within a repeat.
 
 1. **Summary (baseline).** When the context passes 75% of the budget, one LLM call compacts everything except the pinned blocks and the last 2 chunks into a single summary block. This is Codex-style harness-scheduled compaction, the paper's main baseline.
 2. **CLM.** The model has one bash tool over `ctx.txt`.
@@ -89,7 +90,7 @@ The gate estimates tokens as characters / 4, because it must decide before the n
    - The harness then appends the next chunk.
    - The summary arm skips the edit turns and compacts at the 75% threshold instead.
    - After the last chunk, the CLM arms get one more edit phase before the questions.
-2. **Query phase.** The final context is frozen. Each question is asked in its own call, with no edits allowed. Separate calls keep answers independent, and because the frozen context is cached, they cost about $0.02 per sample.
+2. **Query phase.** The final context is frozen. Each question is asked in its own call, with no edits allowed. Questions go one at a time until the provider reports a cache hit (at most 3), then in parallel, so the parallel calls do not arrive before the cache entry exists. Separate calls keep answers independent, and because the frozen context is cached, they cost about $0.02 per sample.
 
 ## Components
 
@@ -118,7 +119,7 @@ Data is pinned by hash, like EvoSQL's data scripts.
 - **Malformed `ctx.txt` after an edit:** roll back and tell the model "parse failed".
 - **Banned command:** rejected without running, with the allow-list repeated.
 - **No room made before an overflowing chunk:** the harness drops the oldest unpinned blocks and logs a forced truncation, which is counted per arm.
-- **API error:** 3 retries. After that the sample is marked failed, skipped, and failures are reported per arm.
+- **API error:** 3 retries for connection, timeout, rate-limit and server errors. A rejected request (any other 4xx) fails that sample at once. A bad key or no balance (401, 402) stops the run. Failed samples are skipped, and the report leaves out every (sample, repeat) that is not finished in all three arms.
 
 ## Metrics and analysis
 

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from cacheclm.report import call_cost, kept_share, paired, write_report
+from cacheclm.report import call_cost, kept_share, load_runs, paired, write_report
 
 PRICES = {"deepseek": {"cache_read": 0.006, "cache_write": 0.30, "output": 1.20},
           "openai": {"cache_read": 0.175, "cache_write": 1.75, "output": 14.0},
@@ -25,16 +25,19 @@ def test_kept_share():
     share, _, _ = kept_share([0.5, 0.5], [0.7, 0.7], [0.6, 0.6])
     assert share == pytest.approx(0.5)
     assert kept_share([0.5, 0.5], [0.5, 0.5], [0.6, 0.6]) is None
+    assert kept_share([0.5, 0.5], [0.45, 0.45], [0.48, 0.48]) is None  # CLM lost accuracy: no gain to keep
 
 
-def fake_run(path, arm, sample, accuracy, hit, edits):
+def fake_run(path, arm, sample, accuracy, hit, edits, noop_edits=0, repeat=0):
     path.parent.mkdir(parents=True, exist_ok=True)
-    meta = {"arm": arm, "sample": sample, "source": "factconsolidation_sh_64k", "repeat": 0}
+    meta = {"arm": arm, "sample": sample, "source": "factconsolidation_sh_64k", "repeat": repeat}
     lines = [{**meta, "event": "call", "phase": "edit", "model": "m", "date": "2026-10-05", "prompt_tokens": 1000,
               "cache_hit_tokens": hit, "ideal_hit_tokens": 900, "completion_tokens": 10, "latency_s": 0.1,
               "cached": False}]
     lines += [{**meta, "event": "edit", "command": "sed x", "allowed": i % 2 == 0, "reason": "r",
-               "rebilled_tokens": 100, "deleted_tokens": 50} for i in range(edits)]
+               "rebilled_tokens": 100, "deleted_tokens": 50, "changed": True} for i in range(edits)]
+    lines += [{**meta, "event": "edit", "command": "wc -c ctx.txt", "allowed": True, "reason": "applied",
+               "rebilled_tokens": 0, "deleted_tokens": 0, "changed": False} for _ in range(noop_edits)]
     lines.append({**meta, "event": "done", "accuracy": accuracy, "n_questions": 100, "ctx_tokens_final": 5000})
     path.write_text("".join(json.dumps(r) + "\n" for r in lines))
 
@@ -47,3 +50,15 @@ def test_write_report_end_to_end(tmp_path):
     text = (tmp_path / "out" / "summary.md").read_text()
     assert "Primary endpoints" in text and "S/3" in text and "anthropic" in text
     assert (tmp_path / "out" / "summary.html").exists() and (tmp_path / "out" / "accuracy_vs_cost.png").exists()
+
+
+def test_report_counts_real_changes_and_only_repeats_complete_for_all_arms(tmp_path):
+    runs = tmp_path / "runs"
+    for arm in ("summary", "clm", "gate"):
+        fake_run(runs / arm / "S_1_r0.jsonl", arm, "S/1", 0.5, 900, 2, noop_edits=3)
+    fake_run(runs / "clm" / "S_1_r1.jsonl", "clm", "S/1", 0.9, 900, 0, repeat=1)  # r1 has no summary or gate run
+    data, examples, incomplete = load_runs(runs, PRICES)
+    assert incomplete == ["S/1 clm r1"]
+    assert data[("S/1", "clm")]["accuracy"] == pytest.approx(0.5)
+    assert data[("S/1", "clm")]["edits"] == 2
+    assert all(e["changed"] for e in examples)

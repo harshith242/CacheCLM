@@ -58,6 +58,10 @@ class LLM:
                 last = e
                 time.sleep(min(2 ** (attempt + 1), 60))
                 continue
+            except openai.APIStatusError as e:
+                if e.status_code in (401, 402):  # bad key or no balance: stop the whole run
+                    raise
+                raise RuntimeError(f"{self.model}: request rejected ({e.status_code}): {e}") from e
             return {"content": resp.choices[0].message.content or "", "model": resp.model,
                     "prompt_tokens": resp.usage.prompt_tokens, "cache_hit_tokens": _hits(resp.usage),
                     "completion_tokens": resp.usage.completion_tokens,
