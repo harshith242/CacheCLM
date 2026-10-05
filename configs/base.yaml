@@ -34,8 +34,15 @@ samples:
   - {split: Accurate_Retrieval, row: 11}
   - {split: Conflict_Resolution, row: 2}
   - {split: Conflict_Resolution, row: 6}
+# A second repeat of the FactConsolidation unit (rows 6 and 2 share one text) to measure run-to-run noise.
+extra_runs:
+  - {split: Conflict_Resolution, row: 6, repeat: 1}
+  - {split: Conflict_Resolution, row: 2, repeat: 1}
+# Smoke runs use data that is not evaluated. FactConsolidation mh_32k (row 1) gets a 12K budget so editing is needed,
+# and all 100 questions so the gate sees a realistic turns_left. EventQA uses eventqa_full text beyond what rows 7-11 cover.
 smoke:
-  sample: {split: Conflict_Resolution, row: 6}
-  questions: 5
+  samples:
+    - {split: Conflict_Resolution, row: 1, questions: 100, context_budget: 12000}
+    - {split: Accurate_Retrieval, row: 2, start: 285000, end: 570000, questions: 5}
   runs_dir: runs_smoke
   results_dir: results_smoke

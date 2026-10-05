@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from cacheclm.report import call_cost, kept_share, load_runs, paired, write_report
+from cacheclm.report import call_cost, kept_share, load_units, paired, write_report
 
 PRICES = {"deepseek": {"cache_read": 0.006, "cache_write": 0.30, "output": 1.20},
           "openai": {"cache_read": 0.175, "cache_write": 1.75, "output": 14.0},
@@ -28,41 +28,63 @@ def test_kept_share():
     assert kept_share([0.5, 0.5], [0.45, 0.45], [0.48, 0.48]) is None  # CLM lost accuracy: no gain to keep
 
 
-def fake_run(path, arm, sample, accuracy, hit, edits, noop_edits=0, repeat=0):
+def call(phase, hit, prompt=1000):
+    return {"event": "call", "phase": phase, "model": "m", "prompt_tokens": prompt, "cache_hit_tokens": hit,
+            "ideal_hit_tokens": hit, "completion_tokens": 10, "latency_s": 0.1, "cached": False}
+
+
+def fake_run(runs, arm, sample, unit, family, accuracy, stream_hit=900, edits=0, repeat=0, wrong_present=None):
+    path = runs / arm / f"{sample.replace('/', '_')}_r{repeat}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    meta = {"arm": arm, "sample": sample, "source": "factconsolidation_sh_64k", "repeat": repeat}
-    lines = [{**meta, "event": "call", "phase": "edit", "model": "m", "date": "2026-10-05", "prompt_tokens": 1000,
-              "cache_hit_tokens": hit, "ideal_hit_tokens": 900, "completion_tokens": 10, "latency_s": 0.1,
-              "cached": False}]
-    lines += [{**meta, "event": "edit", "command": "sed x", "allowed": i % 2 == 0, "reason": "r",
-               "rebilled_tokens": 100, "deleted_tokens": 50, "changed": True} for i in range(edits)]
-    lines += [{**meta, "event": "edit", "command": "wc -c ctx.txt", "allowed": True, "reason": "applied",
-               "rebilled_tokens": 0, "deleted_tokens": 0, "changed": False} for _ in range(noop_edits)]
-    lines.append({**meta, "event": "done", "accuracy": accuracy, "n_questions": 100, "ctx_tokens_final": 5000})
+    meta = {"arm": arm, "sample": sample, "source": family, "repeat": repeat}
+    lines = [{**meta, **call("edit", stream_hit)}, {**meta, **call("query", 990)}]
+    lines += [{**meta, "event": "edit", "command": "sed x", "allowed": i % 2 == 0, "reason": "r", "changed": True,
+               "rebilled_tokens": 100, "deleted_tokens": 50} for i in range(edits)]
+    if wrong_present is not None:
+        lines.append({**meta, "event": "answer", "qi": 0, "prediction": "x", "correct": False,
+                      "gold_fact_present": wrong_present})
+    lines.append({**meta, "event": "done", "accuracy": accuracy, "n_questions": 100, "ctx_tokens_final": 5000,
+                  "unit": unit, "family": family, "final_context": "ctx"})
     path.write_text("".join(json.dumps(r) + "\n" for r in lines))
 
 
-def test_write_report_end_to_end(tmp_path):
-    for i, sample in enumerate(["S/1", "S/2", "S/3"]):
-        for arm, acc, hit, edits in [("summary", 0.5, 900, 0), ("clm", 0.7, 100, 4), ("gate", 0.65, 800, 2)]:
-            fake_run(tmp_path / "runs" / arm / f"S_{i}_r0.jsonl", arm, sample, acc + 0.01 * i, hit, edits)
-    write_report(tmp_path / "runs", tmp_path / "out", PRICES)
-    text = (tmp_path / "out" / "summary.md").read_text()
-    assert "CLM − summary:** +0.200" in text  # 0.7 vs 0.5 on every sample
-    assert "clm / summary:** 5.96x" in text  # 282.6 vs 47.4 micro-dollars per call (100 vs 900 cached tokens)
-    assert "gate / summary:** 1.62x" in text
-    assert "gate keeps:** 75%" in text  # (0.65 - 0.5) / (0.7 - 0.5)
-    assert "S/3" in text and "anthropic" in text
-    assert (tmp_path / "out" / "summary.html").exists() and (tmp_path / "out" / "accuracy_vs_cost.png").exists()
+ARM_ACC = [("summary", 0.5, 900), ("clm", 0.7, 100), ("gate", 0.65, 800), ("skill", 0.6, 850)]
 
 
-def test_report_counts_real_changes_and_only_repeats_complete_for_all_arms(tmp_path):
+def test_a_unit_counts_its_streaming_cost_once(tmp_path):
     runs = tmp_path / "runs"
-    for arm in ("summary", "clm", "gate"):
-        fake_run(runs / arm / "S_1_r0.jsonl", arm, "S/1", 0.5, 900, 2, noop_edits=3)
-    fake_run(runs / "clm" / "S_1_r1.jsonl", "clm", "S/1", 0.9, 900, 0, repeat=1)  # r1 has no summary or gate run
-    data, examples, incomplete = load_runs(runs, PRICES)
-    assert incomplete == ["S/1 clm r1"]
-    assert data[("S/1", "clm")]["accuracy"] == pytest.approx(0.5)
-    assert data[("S/1", "clm")]["edits"] == 2
-    assert all(e["changed"] for e in examples)
+    for arm, acc, hit in ARM_ACC:
+        fake_run(runs, arm, "CR/6", "u1", "factconsolidation", acc, hit)
+        fake_run(runs, arm, "CR/2", "u1", "factconsolidation", acc, hit)  # same text: its stream replayed for free
+    means, _, info, _, _ = load_units(runs, PRICES)
+    one_stream = call_cost(call("edit", 900), PRICES["deepseek"], "cache_hit_tokens")
+    one_query = call_cost(call("query", 990), PRICES["deepseek"], "cache_hit_tokens")
+    assert means[("u1", "summary")]["billed"] == pytest.approx(one_stream + 2 * one_query)
+    assert info["u1"] == ("factconsolidation", {"CR/2", "CR/6"})
+
+
+def test_report_has_families_references_and_the_fact_error_split(tmp_path):
+    runs = tmp_path / "runs"
+    for u in ("e1", "e2", "e3"):
+        for arm, acc, hit in ARM_ACC:
+            fake_run(runs, arm, f"AR/{u}", u, "eventqa", acc, hit, edits=2)
+    for arm, acc, hit in ARM_ACC:
+        fake_run(runs, arm, "CR/6", "f1", "factconsolidation", acc, hit, wrong_present=(arm == "clm"))
+    fake_run(runs, "none", "AR/e1", "e1", "eventqa", 0.3)
+    write_report(runs, tmp_path / "out", PRICES)
+    text = (tmp_path / "out" / "summary.md").read_text()
+    assert "## All units" in text and "## eventqa" in text and "## factconsolidation" in text
+    assert "CLM − summary:** +0.200" in text
+    assert "| none |" in text  # the reference arm is listed
+    assert "| clm | 0 | 1 |" in text  # factconsolidation errors: retention 0, resolution 1
+    assert (tmp_path / "out" / "accuracy_vs_cost.png").exists()
+
+
+def test_only_unit_repeats_finished_in_every_arm_count(tmp_path):
+    runs = tmp_path / "runs"
+    for arm, acc, hit in ARM_ACC:
+        fake_run(runs, arm, "CR/6", "f1", "factconsolidation", acc, hit)
+    fake_run(runs, "clm", "CR/6", "f1", "factconsolidation", 0.9, repeat=1)  # r1 has no other arm
+    means, _, _, _, incomplete = load_units(runs, PRICES)
+    assert means[("f1", "clm")]["accuracy"] == pytest.approx(0.7)
+    assert incomplete == ["f1 clm r1"]
