@@ -12,5 +12,5 @@ def test_full_run_jobs_add_references_once_and_the_extra_repeat():
         ("A", 0, ARMS), ("B", 0, ARMS), ("B", 1, ARMS), ("A", 0, REFERENCES), ("B", 0, REFERENCES)]
 
 
-def test_smoke_jobs_run_the_primary_arms_only():
-    assert [(s["split"], r, arms) for s, r, arms in jobs(CFG, smoke=True)] == [("C", 0, ARMS)]
+def test_smoke_jobs_run_every_arm_so_the_references_are_checked_live_once():
+    assert [(s["split"], r, arms) for s, r, arms in jobs(CFG, smoke=True)] == [("C", 0, ARMS + REFERENCES)]

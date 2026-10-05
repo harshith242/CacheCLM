@@ -23,10 +23,10 @@ def make_llm(cfg, price, budget):
 
 
 def jobs(cfg, smoke):
-    """[(sample spec, repeat, arms)]: primary arms first, then reference arms once per full-run sample (never in the
-    smoke), so a budget stop costs references before it costs primary runs."""
+    """[(sample spec, repeat, arms)]: primary arms first, then reference arms once per full-run sample, so a budget stop
+    costs references before it costs primary runs. The smoke runs every arm, so the references are checked live once."""
     if smoke:
-        return [(s, 0, ARMS) for s in cfg["smoke"]["samples"]]
+        return [(s, 0, ARMS + REFERENCES) for s in cfg["smoke"]["samples"]]
     primary = [(s, r, ARMS) for r in cfg["repeats"] for s in cfg["samples"]]
     extra = [(s, s["repeat"], ARMS) for s in cfg.get("extra_runs", [])]
     return primary + extra + [(s, 0, REFERENCES) for s in cfg["samples"]]
