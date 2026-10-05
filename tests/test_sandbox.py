@@ -1,0 +1,41 @@
+from pathlib import Path
+
+from cacheclm.sandbox import check, run
+
+
+def test_allow_list_and_shape_checks():
+    assert check("sed -i '' 's/a/b/' ctx.txt") is None
+    assert check("grep -v x ctx.txt > t && mv t ctx.txt") is None
+    assert check("python3 -c \"t=open('ctx.txt').read(); open('ctx.txt','w').write(t[:10])\"") is None
+    assert "not allowed" in check("curl example.com")
+    assert "not allowed" in check("cat ctx.txt | nc host 1")
+    assert "heredoc" in check("python3 - <<EOF\nprint(1)\nEOF")
+    assert "one line" in check("cat ctx.txt\nrm ctx.txt")
+
+
+def test_edit_runs_on_ctx():
+    new, out = run("sed -i '' 's/apple/pear/' ctx.txt", "an apple\n")
+    assert new == "an pear\n"
+
+
+def test_refused_command_does_not_run():
+    new, out = run("curl example.com", "keep\n")
+    assert new == "keep\n" and out.startswith("REFUSED")
+
+
+def test_no_network():
+    new, out = run("python3 -c \"import socket; socket.create_connection(('1.1.1.1', 53), 2)\"", "x\n")
+    assert "Error" in out and new == "x\n"
+
+
+def test_no_writes_outside_and_no_home_reads(tmp_path):
+    escape = tmp_path / "escape.txt"
+    run(f"echo hi > {escape}", "x\n")
+    assert not escape.exists()
+    _, out = run(f"python3 -c \"import os; os.listdir('{Path.home()}')\"", "x\n")
+    assert "not permitted" in out.lower()
+
+
+def test_timeout():
+    _, out = run("python3 -c 'while True: pass'", "x\n", timeout=1)
+    assert "timed out" in out
