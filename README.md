@@ -8,13 +8,24 @@
 
 Hosted APIs are different. Their prompt cache reuses only the start of a request that matches the previous one. An edit in the middle therefore turns every later token into a cache miss, and DeepSeek bills a miss at 50x a hit. This project measures that trade-off in billed dollars.
 
-## The three arms
+## The arms
 
-All three use the same model (DeepSeek Flash, thinking off), the same text chunks, questions and pinned task block, and a 32K-token context budget.
+All primary arms use the same model (DeepSeek Flash, thinking off), the same text chunks, questions and pinned task block, and a 32K-token context budget. The task block is sent first in every request but is never part of the editable file `ctx.txt`.
 
-1. **Summary.** When the context passes 75% of the budget, one call compacts everything except the last 2 chunks into a summary.
-2. **CLM.** The model edits `ctx.txt` with one-line shell commands between chunks.
-3. **CLM + gate.** The same, but each edit must pass the cache-aware gate below. The model only notices the gate when it rejects an edit.
+1. **Summary.** When the context passes 75% of the budget, one call compacts everything except the last 2 chunks into a summary of at most about 1,500 words.
+2. **CLM.** The model edits `ctx.txt` with shell commands between chunks. Its prompt ports the paper's guidance: think first, prefer one large edit, be generous, and remember that an edit makes everything after it be re-read.
+3. **CLM + gate.** The same, but each edit must pass the cache-aware gate below. The model sees the gate's reasoning only when it rejects an edit.
+4. **Skill (exploratory).** CLM plus a short skill:
+   - **Books:** replace each new part with an event log.
+   - **Fact lists:** delete facts that a newer fact overrides, then the oldest.
+
+   Its guidance is mostly editing at the end of the file.
+
+**Two reference arms** bracket the results and are not primary endpoints:
+- **none:** the questions with no context, the world-knowledge floor;
+- **full:** the whole text in one prompt, the ceiling.
+
+**Forced truncation.** If an arm still overflows, the harness cuts the oldest whole lines of `ctx.txt`.
 
 ## The gate
 
@@ -37,11 +48,13 @@ Example: DeepSeek prices (hit $0.006/M, miss $0.30/M), a 30K context, 10 turns l
 
 **Source:** [MemoryAgentBench](https://huggingface.co/datasets/ai-hyz/MemoryAgentBench) (MIT), pinned to commit `7ea0669`. Only two parquet files are used. `scripts/get_data.py` downloads them over plain HTTPS and checks their SHA-256.
 
-**Samples:** 7, chosen by length before any run:
-- the 5 EventQA books at about 140K tokens (`eventqa_131072`);
+**Samples:** 7, streamed in 4K-token chunks, 2-2.2x the context budget:
+- the 5 EventQA books at about 70K tokens (`eventqa_65536`);
 - FactConsolidation single-hop and multi-hop at about 68K tokens (`*_64k`).
 
-Each streams 2-4.4x the context budget through the agent, in 4K-token chunks.
+The first smoke run projected about $9 for the ~140K-token EventQA versions, so the plan fell back to the ~70K versions.
+
+**Units.** FactConsolidation rows 6 and 2 share one text and differ only in their questions. They count as one unit with 200 questions, and that unit gets a second repeat to measure run-to-run noise. Each EventQA book is its own unit. Results are reported overall and per task family.
 
 **Prompts and scoring** are adapted from the benchmark's `utils/templates.py` and `utils/eval_other_utils.py` (`substring_exact_match`).
 
@@ -52,14 +65,18 @@ Needs macOS (edits run under `sandbox-exec`), Python 3.13, [uv](https://docs.ast
 ```bash
 uv sync
 uv run python scripts/get_data.py
-uv run cacheclm smoke                # 1 sample, 5 questions, 3 arms: about $0.10
+uv run cacheclm smoke                # data not evaluated, 4 arms: about $0.4 (see below)
 uv run cacheclm report --smoke
-uv run cacheclm run                  # 7 samples x 3 arms x 2 repeats
+uv run cacheclm run                  # 7 samples x 4 arms, the 2 reference arms, and the extra FactConsolidation repeat
 uv run cacheclm report               # results/summary.md, summary.html, accuracy_vs_cost.png
 ```
 
+**Smoke samples** use only data that is not evaluated:
+- **FactConsolidation mh_32k (row 1):** a 12K budget so editing is needed, and all 100 questions.
+- **EventQA:** the `eventqa_full` text beyond what the evaluated rows cover, with 5 questions. This checks behaviour only; its accuracy is not interpreted.
+
 **Cost:**
-- **Cap:** every real API call counts against a $5 cap stored in `cache/spend.json`. The full run is estimated at about $4.
+- **Cap:** every real API call counts against a $5 cap stored in `cache/spend.json`. The full run is estimated at about $3.4-3.9, plus about $0.4 for the smoke runs.
 - **Replays:** cached calls replay for free.
 - **Resuming:** an interrupted run skips the (sample, arm, repeat) runs that already finished.
 
