@@ -62,7 +62,8 @@ class LLM:
                 if e.status_code in (401, 402):  # bad key or no balance: stop the whole run
                     raise
                 raise RuntimeError(f"{self.model}: request rejected ({e.status_code}): {e}") from e
-            return {"content": resp.choices[0].message.content or "", "model": resp.model,
+            return {"content": resp.choices[0].message.content or "", "finish_reason": resp.choices[0].finish_reason,
+                    "model": resp.model,
                     "prompt_tokens": resp.usage.prompt_tokens, "cache_hit_tokens": _hits(resp.usage),
                     "completion_tokens": resp.usage.completion_tokens,
                     "latency_s": round(time.monotonic() - start, 3)}

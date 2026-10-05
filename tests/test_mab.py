@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from cacheclm.mab import check_file, chunk_text, correct, load_sample, normalize_answer
+from cacheclm.mab import check_file, chunk_text, correct, gold_fact, load_sample, normalize_answer
 
 DATA = Path("data/memoryagentbench")
 
@@ -43,3 +43,12 @@ def test_the_configured_samples_load():
     assert event.source == "eventqa_131072" and facts.source == "factconsolidation_sh_64k"
     assert len(event.questions) == len(event.answers) == 100
     assert facts.answers[0] == ["Ancient Greek"]
+
+
+def test_gold_fact_is_the_latest_matching_fact_about_the_question():
+    context = ("1. The author of Hard Times is Charles Dickens.\n"
+               "2. Martin Luther King Jr. was born in Atlanta.\n"
+               "9. The author of Hard Times is Martin Luther King Jr.\n")
+    golds = ["Martin Luther King Jr."]
+    assert gold_fact(context, "Who is the author of Hard Times?", golds) == "9. The author of Hard Times is Martin Luther King Jr."
+    assert gold_fact(context, "Where is Paris?", ["Lyon"]) is None

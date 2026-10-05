@@ -19,7 +19,7 @@ class FakeClient:
         self.calls += 1
         usage = SimpleNamespace(prompt_tokens=1000, completion_tokens=100, prompt_cache_hit_tokens=600)
         return SimpleNamespace(model="deepseek-flash", usage=usage,
-                               choices=[SimpleNamespace(message=SimpleNamespace(content="hi"))])
+                               choices=[SimpleNamespace(message=SimpleNamespace(content="hi"), finish_reason="length")])
 
 
 def test_cost_bills_hits_misses_and_output():
@@ -81,3 +81,8 @@ def test_connection_errors_are_retried_then_the_sample_fails(tmp_path, monkeypat
     with pytest.raises(RuntimeError, match="gave up after 4 tries"):
         llm.chat([{"role": "user", "content": "q"}], 8, 0)
     assert client.calls == 4 and not list(tmp_path.rglob("*.json"))  # nothing cached, so a rerun tries again
+
+
+def test_replies_carry_the_finish_reason(tmp_path):
+    llm = LLM("deepseek-flash", FakeClient(), tmp_path, 0.3, PRICE)
+    assert llm.chat([{"role": "user", "content": "q"}], 64, repeat=0)["finish_reason"] == "length"

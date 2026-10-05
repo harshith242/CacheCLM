@@ -12,9 +12,10 @@ temperature: 0.3
 repeats: [0]                # 1 repeat to stay under the $5 cap (decided after the first smoke run)
 max_edits_per_chunk: 3
 max_condense_tries: 3
+edit_max_tokens: 2048
 summary_at: 0.75
 keep_recent_chunks: 2
-summary_words: 3000         # target length; ~4K tokens, so it finishes well before the output cap
+summary_words: 1500         # ~2K tokens; the 3,000-word target still hit the cap in smoke 2
 summary_max_tokens: 5000
 nudges: [0.25, 0.5, 0.75]
 query_workers: 8

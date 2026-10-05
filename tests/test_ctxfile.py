@@ -1,41 +1,44 @@
-from cacheclm.ctxfile import append, blocks, drop_oldest, new_context, next_index, split_for_summary, split_pinned
+from cacheclm.ctxfile import append, blocks, cut_oldest_lines, next_index, normalize, split_for_summary
 
 
 def build(n):
-    ctx = new_context("TASK")
+    body = ""
     for i in range(n):
-        ctx = append(ctx, "chunk", f"part {i}")
-    return ctx
+        body = append(body, "chunk", f"part {i}")
+    return body
 
 
-def test_blocks_are_numbered_in_order():
-    ctx = build(3)
-    assert [(b[2], b[3], b[4]) for b in blocks(ctx)] == [(0, "task", True), (1, "chunk", False), (2, "chunk", False),
-                                                       (3, "chunk", False)]
-    assert next_index(ctx) == 4
+def test_body_blocks_are_numbered_from_one():
+    assert next_index("") == 1
+    assert [(b[2], b[3]) for b in blocks(build(3))] == [(1, "chunk"), (2, "chunk"), (3, "chunk")]
 
 
 def test_append_after_an_edit_without_trailing_newline():
-    ctx = build(1).rstrip("\n") + "\n[[CTX_TURN 7 role=notes]]\nmy note"
-    ctx = append(ctx, "chunk", "next")
-    assert [b[2] for b in blocks(ctx)] == [0, 1, 7, 8]
+    body = build(1) + "[[CTX_TURN 7 role=notes]]\nmy note"
+    assert [b[2] for b in blocks(append(body, "chunk", "next"))] == [1, 7, 8]
 
 
-def test_drop_oldest_keeps_the_pinned_block():
-    ctx = drop_oldest(build(2))
-    assert "part 0" not in ctx and "part 1" in ctx and ctx.startswith(new_context("TASK"))
-    assert drop_oldest(new_context("TASK")) == new_context("TASK")
+def test_normalize_heads_loose_text_and_strips_model_pinned_marks():
+    assert normalize("\n\n12. a fact\n").startswith("[[CTX_TURN 1 role=notes]]\n12. a fact")
+    assert normalize("[[CTX_TURN 4 role=notes pinned]]\nx\n") == "[[CTX_TURN 4 role=notes]]\nx\n"
+    assert normalize("") == "" and normalize(build(2)) == build(2)
+
+
+def test_cut_oldest_lines_keeps_the_newest_lines_under_a_header():
+    body = "".join(f"{i}. fact {i}\n" for i in range(10))
+    cut = cut_oldest_lines(body, 30)
+    assert cut.startswith("[[CTX_TURN 1 role=chunk]]\n") and cut.endswith("9. fact 9\n")
+    assert "0. fact 0" not in cut and len(cut) < len(body)
 
 
 def test_split_for_summary_keeps_the_last_chunks():
-    head, middle, tail = split_for_summary(build(4), keep=2)
-    assert head == new_context("TASK")
-    assert "part 0" in middle and "part 1" in middle and "part 2" not in middle
-    assert "part 2" in tail and "part 3" in tail
+    older, tail = split_for_summary(build(4), keep=2)
+    assert "part 0" in older and "part 1" in older and "part 2" not in older
+    assert tail.startswith("[[CTX_TURN 3 role=chunk]]") and "part 3" in tail
     assert split_for_summary(build(2), keep=2) is None
 
 
-def test_only_the_blocks_after_the_task_are_editable():
-    pinned, editable = split_pinned(build(2))
-    assert pinned == new_context("TASK") and editable.startswith("[[CTX_TURN 1 role=chunk]]")
-    assert pinned + editable == build(2)
+def test_cutting_always_removes_content_even_when_the_header_is_first():
+    body = "[[CTX_TURN 3 role=chunk]]\nshort line\nnewest line\n"
+    cut = cut_oldest_lines(body, 5)
+    assert len(cut) < len(body) and "short line" not in cut and cut.endswith("newest line\n")

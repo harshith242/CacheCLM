@@ -92,3 +92,15 @@ def correct(prediction, golds):
     """The benchmark's substring_exact_match, against any gold answer."""
     pred = normalize_answer(prediction or "")
     return any(normalize_answer(g) in pred for g in golds)
+
+
+def gold_fact(context, question, golds):
+    """The latest numbered fact containing a gold answer and sharing the most words with the question, or None."""
+    words = set(normalize_answer(question).split())
+    best = None
+    for line in context.splitlines():
+        if re.match(r"^\d+\. ", line) and any(normalize_answer(g) in normalize_answer(line) for g in golds):
+            overlap = len(words & set(normalize_answer(line).split()))
+            if overlap and (best is None or overlap >= best[0]):
+                best = (overlap, line)
+    return best[1] if best else None

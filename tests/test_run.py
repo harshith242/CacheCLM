@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from cacheclm.arms import control, parse_command, system
+from cacheclm.arms import ARMS, SKILL, control, parse_command, system
 from cacheclm.budget import BudgetExceeded
 from cacheclm.files import read_jsonl
 from cacheclm.mab import Sample
@@ -11,7 +11,7 @@ from cacheclm.run import Recorder, answer_all, run_log, run_sample
 
 PRICE = {"cache_read": 0.006, "cache_write": 0.30, "output": 1.20}
 CFG = {"context_budget": 400, "chunk_tokens": 40, "max_edits_per_chunk": 3, "max_condense_tries": 3,
-       "summary_at": 0.75, "keep_recent_chunks": 2, "summary_words": 60, "summary_max_tokens": 100,
+       "summary_at": 0.75, "keep_recent_chunks": 2, "summary_words": 60, "summary_max_tokens": 100, "edit_max_tokens": 200,
        "nudges": [0.25, 0.5, 0.75], "query_workers": 2}
 DROP_FIRST = ("```bash\npython3 -c \"t=open('ctx.txt').read(); b=t.split('[[CTX_TURN '); "
               "open('ctx.txt','w').write('[[CTX_TURN '.join(b[:1]+b[2:]))\"\n```")  # ctx.txt starts at the oldest part
@@ -29,8 +29,10 @@ class FakeLLM:
     def chat(self, messages, max_tokens, repeat):
         self.calls += 1
         text = messages[-1]["content"]
-        return {"content": self.script(text), "model": "fake", "prompt_tokens": len(text) // 4,
-                "cache_hit_tokens": 0, "completion_tokens": 10, "latency_s": 0.0, "cached": False}
+        out = self.script(text)
+        content, finish = out if isinstance(out, tuple) else (out, "stop")
+        return {"content": content, "model": "fake", "prompt_tokens": len(text) // 4, "cache_hit_tokens": 0,
+                "completion_tokens": 10, "latency_s": 0.0, "cached": False, "finish_reason": finish}
 
 
 def answers(text):
@@ -222,3 +224,73 @@ def test_summary_asks_for_a_length_it_can_finish(tmp_path):
 
     run_sample(sample(), "summary", 0, Spy(lambda t: answers(t) or "SUMMARY"), CFG, PRICE, tmp_path)
     assert seen and all(m == 100 and "at most 60 words" in text for m, text in seen)
+
+
+def done(tmp_path, arm):
+    return events(tmp_path, arm, "done")[-1]
+
+
+def test_keeping_the_last_lines_keeps_the_newest_facts_within_budget(tmp_path):
+    keep_tail = "```bash\ntail -n 12 ctx.txt > t && mv t ctx.txt\n```"  # leaves headless text at the top
+    llm = FakeLLM(lambda t: answers(t) or (keep_tail if "OVER LIMIT" in t else "READY"))
+    run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
+    assert all(s["ctx_tokens"] <= CFG["context_budget"] for s in events(tmp_path, "clm", "step"))
+    final = done(tmp_path, "clm")["final_context"]
+    assert "59. fact number 59." in final
+    assert final.split("]]\n", 1)[1].split("\n[[CTX_TURN", 1)[0].count("fact number") == 0  # task block holds no facts
+
+
+def test_model_written_pinned_header_is_stripped(tmp_path):
+    note = "```bash\nprintf '[[CTX_TURN 99 role=notes pinned]]\\nmy note\\n' >> ctx.txt\n```"
+    commands = iter([note])
+    llm = FakeLLM(lambda t: answers(t) or next(commands, "READY"))
+    run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
+    final = done(tmp_path, "clm")["final_context"]
+    assert final.count(" pinned]]") == 1  # only the task block
+
+
+def test_an_edit_that_empties_ctx_is_rolled_back(tmp_path):
+    wipe = "```bash\npython3 -c \"open('ctx.txt', 'w')\"\n```"
+    commands = iter(["READY", wipe])  # wipe once the body has a part in it
+    llm = FakeLLM(lambda t: answers(t) or next(commands, "READY"))
+    run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
+    wiped = [e for e in events(tmp_path, "clm", "edit") if e["emptied"]]
+    assert wiped and not wiped[0]["allowed"]
+
+
+def test_a_cut_off_reply_is_not_read_as_ready(tmp_path):
+    replies = iter([("THOUGHT: keep the newest.\n```bash\npython3 -c \"print(1)", "length")])
+    llm = FakeLLM(lambda t: answers(t) or next(replies, "READY"))
+    run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
+    records = [r["event"] for r in read_jsonl(run_log(tmp_path, "clm", sample(), 0))]
+    after = records[records.index("cut_off") + 1:]
+    assert next(e for e in after if e in ("call", "step")) == "call"  # same phase asked again, not ended as READY
+
+
+def test_gate_explains_itself_only_on_rejection(tmp_path):
+    prompts = []
+
+    class Spy(FakeLLM):
+        def chat(self, messages, max_tokens, repeat):
+            prompts.append(messages[-1]["content"])
+            return super().chat(messages, max_tokens, repeat)
+
+    llm = Spy(lambda t: answers(t) or (DROP_FIRST if t.count("role=chunk") >= 2 else "READY"))
+    run_sample(sample(), "gate", 0, llm, CFG, PRICE, tmp_path)
+    assert any("edit rejected" in p for p in prompts)
+    assert not any("allowed" in p.split("Result of your last command:")[-1] for p in prompts if "Result of" in p)
+
+
+def test_skill_arm_is_clm_plus_the_skill_and_is_not_gated(tmp_path):
+    assert system("skill", 100, 0) == system("clm", 100, 0) + SKILL
+    assert ARMS == ("summary", "clm", "gate", "skill")
+    llm = FakeLLM(lambda t: answers(t) or (DROP_FIRST if t.count("role=chunk") >= 2 else "READY"))
+    run_sample(sample(), "skill", 0, llm, CFG, PRICE, tmp_path)
+    edits = [e for e in events(tmp_path, "skill", "edit") if e["changed"]]
+    assert edits and all(e["allowed"] for e in edits)
+
+
+def test_a_cut_off_summary_is_logged(tmp_path):
+    llm = FakeLLM(lambda t: answers(t) or ("SUMMARY", "length"))
+    run_sample(sample(), "summary", 0, llm, CFG, PRICE, tmp_path)
+    assert all(s["cut_off"] for s in events(tmp_path, "summary", "summary"))
