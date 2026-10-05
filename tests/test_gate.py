@@ -1,15 +1,8 @@
-from cacheclm.gate import decide, first_change, survivors
+from cacheclm.gate import decide
 
 DEEPSEEK = {"cache_read": 0.006, "cache_write": 0.30}
 ANTHROPIC = {"cache_read": 0.30, "cache_write": 3.75}
 K = 1000 * 4  # characters in 1K tokens
-
-
-def test_first_change_and_survivors():
-    old, new = "aaaXbbb", "aaabbb"
-    assert first_change(old, new) == 3
-    assert survivors(old, new, 3) == 3  # "bbb" survives after the deleted X
-    assert survivors("abc", "abc", 3) == 0
 
 
 def test_worked_example_middle_edit_is_rejected_on_deepseek():

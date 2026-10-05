@@ -1,4 +1,4 @@
-from cacheclm.ctxfile import append, blocks, drop_oldest, new_context, next_index, pinned_intact, split_for_summary, tokens
+from cacheclm.ctxfile import append, blocks, drop_oldest, new_context, next_index, pinned_intact, split_for_summary
 
 
 def build(n):
@@ -40,7 +40,3 @@ def test_pinned_block_must_stay_first_and_unchanged():
     assert pinned_intact(old, old.replace("part 0", "p0"))
     assert not pinned_intact(old, old.replace("TASK", "TASK!"))
     assert not pinned_intact(old, old[old.index("[[CTX_TURN 1"):])
-
-
-def test_tokens_are_chars_over_four():
-    assert tokens("x" * 4001) == 1000

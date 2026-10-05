@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from cacheclm.mab import check_file, chunk_text, correct, family, load_sample, normalize_answer
+from cacheclm.mab import check_file, chunk_text, correct, load_sample, normalize_answer
 
 DATA = Path("data/memoryagentbench")
 
@@ -27,11 +27,6 @@ def test_scoring_matches_the_benchmark():
     assert correct("answer: France", ["Germany", "France"])
     assert not correct("Paris", ["France"])
     assert not correct(None, ["France"])
-
-
-def test_family():
-    assert family("eventqa_131072") == "eventqa"
-    assert family("factconsolidation_sh_64k") == "factconsolidation"
 
 
 def test_a_tampered_file_is_refused(tmp_path):

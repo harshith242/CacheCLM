@@ -48,7 +48,11 @@ def test_write_report_end_to_end(tmp_path):
             fake_run(tmp_path / "runs" / arm / f"S_{i}_r0.jsonl", arm, sample, acc + 0.01 * i, hit, edits)
     write_report(tmp_path / "runs", tmp_path / "out", PRICES)
     text = (tmp_path / "out" / "summary.md").read_text()
-    assert "Primary endpoints" in text and "S/3" in text and "anthropic" in text
+    assert "CLM − summary:** +0.200" in text  # 0.7 vs 0.5 on every sample
+    assert "clm / summary:** 5.96x" in text  # 282.6 vs 47.4 micro-dollars per call (100 vs 900 cached tokens)
+    assert "gate / summary:** 1.62x" in text
+    assert "gate keeps:** 75%" in text  # (0.65 - 0.5) / (0.7 - 0.5)
+    assert "S/3" in text and "anthropic" in text
     assert (tmp_path / "out" / "summary.html").exists() and (tmp_path / "out" / "accuracy_vs_cost.png").exists()
 
 

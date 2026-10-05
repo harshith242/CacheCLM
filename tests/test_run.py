@@ -1,7 +1,10 @@
 import threading
 import time
 
+import pytest
+
 from cacheclm.arms import control, parse_command, system
+from cacheclm.budget import BudgetExceeded
 from cacheclm.files import read_jsonl
 from cacheclm.mab import Sample
 from cacheclm.run import Recorder, answer_all, run_log, run_sample
@@ -152,3 +155,32 @@ def test_read_only_and_refused_commands_are_not_changes(tmp_path):
     edits = events(tmp_path, "clm", "edit")
     assert [e["changed"] for e in edits] == [False, False]
     assert [e["refused"] for e in edits] == [False, True]
+
+
+def test_a_model_that_never_makes_room_is_truncated_to_fit(tmp_path):
+    llm = FakeLLM(lambda t: answers(t) or "READY")
+    run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
+    assert events(tmp_path, "clm", "forced_truncation")
+    assert all(s["ctx_tokens"] <= CFG["context_budget"] for s in events(tmp_path, "clm", "step"))
+
+
+def test_an_interrupted_run_restarts_cleanly(tmp_path):
+    path = run_log(tmp_path, "clm", sample(), 0)
+    path.parent.mkdir(parents=True)
+    path.write_text('{"event": "call", "phase": "edit", "stale": true}\n')  # killed mid-run, no done record
+    run_sample(sample(), "clm", 0, FakeLLM(lambda t: answers(t) or "READY"), CFG, PRICE, tmp_path)
+    records = read_jsonl(path)
+    assert not any(r.get("stale") for r in records)
+    assert [r["event"] for r in records].count("done") == 1
+
+
+def test_a_budget_stop_leaves_the_run_resumable(tmp_path):
+    class Broke(FakeLLM):
+        def chat(self, messages, max_tokens, repeat):
+            if self.calls == 5:
+                raise BudgetExceeded("spent $5.01 of $5.00")
+            return super().chat(messages, max_tokens, repeat)
+
+    with pytest.raises(BudgetExceeded):
+        run_sample(sample(), "clm", 0, Broke(lambda t: answers(t) or "READY"), CFG, PRICE, tmp_path)
+    assert not events(tmp_path, "clm", "done")  # so the next run redoes this sample instead of skipping it

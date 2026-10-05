@@ -38,13 +38,9 @@ def test_no_writes_outside_and_no_home_reads(tmp_path):
     assert "not permitted" in out.lower()
 
 
-def test_timeout():
-    _, out = run("python3 -c 'while True: pass'", "x\n", timeout=1)
-    assert "timed out" in out
-
-
 def test_timeout_kills_the_whole_pipeline():
-    run("python3 -c 'import time; time.sleep(31.73)' | cat", "x\n", timeout=1)
+    _, out = run("python3 -c 'import time; time.sleep(31.73)' | cat", "x\n", timeout=1)
+    assert "timed out" in out
     time.sleep(0.5)
     left = subprocess.run(["pgrep", "-f", "31.73"], capture_output=True, text=True).stdout
     assert left == ""

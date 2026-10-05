@@ -72,3 +72,12 @@ def test_auth_errors_still_stop_the_run(tmp_path):
     llm = LLM("m", ErrorClient(status_error(openai.AuthenticationError, 401)), tmp_path, 0.3, PRICE)
     with pytest.raises(openai.AuthenticationError):
         llm.chat([{"role": "user", "content": "q"}], 8, 0)
+
+
+def test_connection_errors_are_retried_then_the_sample_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr("cacheclm.llm.time.sleep", lambda s: None)
+    client = ErrorClient(openai.APIConnectionError(request=httpx.Request("POST", "https://x")))
+    llm = LLM("m", client, tmp_path, 0.3, PRICE, max_tries=4)
+    with pytest.raises(RuntimeError, match="gave up after 4 tries"):
+        llm.chat([{"role": "user", "content": "q"}], 8, 0)
+    assert client.calls == 4 and not list(tmp_path.rglob("*.json"))  # nothing cached, so a rerun tries again
