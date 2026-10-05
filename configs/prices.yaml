@@ -1,0 +1,5 @@
+# USD per 1M tokens, list prices noted 2026-10-05; re-check the provider pages before publishing results.
+# cache_read = cached prompt tokens, cache_write = uncached prompt tokens (Anthropic bills these as cache writes).
+deepseek:  {cache_read: 0.006, cache_write: 0.30, output: 1.20}
+openai:    {cache_read: 0.175, cache_write: 1.75, output: 14.00}
+anthropic: {cache_read: 0.30,  cache_write: 3.75, output: 15.00}

@@ -1,0 +1,9 @@
+.env
+data/
+cache/
+runs*/
+results_smoke/
+__pycache__/
+.venv/
+.pytest_cache/
+.superpowers/
