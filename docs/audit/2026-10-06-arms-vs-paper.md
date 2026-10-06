@@ -315,6 +315,10 @@ group:
 7. Rerun the small DeepSeek config from a fresh run directory (about $0.5–1.0)
    only after you approve.
 
+**Status (2026-10-06):** steps 1–6 are done, with 103 tests passing. Stop-on-overflow is labelled as a CacheCLM
+policy in the code, the logs, the report, the README and the spec. Step 7 is waiting for approval. All arms rerun
+from fresh directories, because earlier results are not comparable.
+
 ---
 
 ## Appendix: original working audit (superseded where it conflicts above)
@@ -323,12 +327,21 @@ group:
 
 Sources:
 - the paper, *Context Language Models* (arXiv 2609.37725, HTML v1);
-- its code, `facebookresearch/context-language-models` (CC BY-NC 4.0; read only, nothing copied): `clm/clm_harness/clm_agent/prompts.yaml`, `clm_agent/harness.py`, `context_env/env.py`, `context_env/edit_gate.py`, `utils/budget.py`, `configs/bcp.yaml`;
+- its code, `facebookresearch/context-language-models` (CC BY-NC 4.0; read only, nothing copied; prompt ideas paraphrased with attribution): `clm/clm_harness/clm_agent/prompts.yaml`, `clm_agent/harness.py`, `context_env/env.py`, `context_env/edit_gate.py`, `utils/budget.py`, `configs/bcp.yaml`;
 - our code at `d19ac21` and the logs of 4 DeepSeek smokes plus 2 local Qwen runs.
 
-## 1. How the paper's harness works (what we compare against)
+## 1. The paper (Appendix E) and its repository (current code)
 
-| Part | Paper (code default; BrowseComp-Plus config where different) |
+**The paper (Appendix E, checked in the PDF).** Summary = Codex prompts, compacting at 75%. CLM gets one editing
+reminder 2,048 tokens before the budget. BrowseComp-Plus uses a 23,560-token budget and 100 turns; editing turns
+are free; a request that would exceed the budget rolls back the last turn, up to six times. TerminalBench 2.1 and
+TBLite end the run when a request would exceed the budget. EdgeBench rolls back up to 50 times. Budgets are counted
+with the o200k tokenizer.
+
+**The repository (current code)** has evolved past some of those settings (version drift). The table below
+describes the repository, not the paper.
+
+| Part | Repository (code default; `configs/bcp.yaml` where different) |
 |---|---|
 | Context | The whole chat transcript (assistant turns, tool outputs, nudges) is mirrored to a file with `[[CTX_TURN i role=...]]` headers. The system and task prefix is protected. The model's own edit turns stay in the transcript and must be managed too. |
 | Tool | Native tool call `bash`, exactly one command per turn, THOUGHT first. The example edit uses a `python3 - <<'PY'` heredoc. |
@@ -338,8 +351,8 @@ Sources:
 | Nudges | One-shot at 25/50/75% of the budget; a tier re-arms if the model compacts back below it. 25% is informational only, because a how-to at that tier "tends to trigger premature wholesale deletion". 50% and 75% add a note contract and a "compact settled spans without wiping" rule. An urgent nudge fires every turn in a band near the limit (adaptive; 0.9 in BCP). |
 | Overflow | **No mechanical truncation.** The newest turns are rolled back and a compaction is demanded, up to 50 times (6 in BCP). Then the model gets one final turn and the run is graded as-is. |
 | Sampling | Temperature 0.7, top_p 0.95; max_tokens 16,384 (4,096 in BCP). Budget = 32,768-token window − max_tokens, with a 2,048-token reserve. Token counts use tiktoken, calibrated to the server's counts. |
-| Summary baseline (Codex-style) | At three quarters of the budget, everything except the system prompt and the task message becomes **one** summary message, written by the same model ("a pointer, not an inventory"). No recent turns are kept verbatim. |
-| Cost metric | Prefix-reuse FLOPs: prefill of the unmatched suffix plus decode. A USD estimate uses input/output list prices **with no cache-hit discount**. The paper does not study API cache billing. That gap is our research question. |
+| Summary baseline (Codex-style) | Paper: Codex prompts at 75%. In ContextBench's skill text, everything except the system prompt and the task message becomes **one** summary ("a pointer, not an inventory"). Whether other benchmarks keep recent turns is not verified. |
+| Cost metric | Prefix-reuse FLOPs: prefill of the unmatched suffix plus decode, so cache-aware compute. Some experiments also report API/gateway USD. Not studied: deciding or evaluating edits by a provider's billed cache-hit, cache-miss and output price ratio. That narrower gap is our question. |
 | Benchmarks | ContextBench (synthetic: Needle Retention, Sudoku, KV Store, Log Triage; up to 24× context pressure), BrowseComp-Plus, TerminalBench, EdgeBench, Software World. **Not MemoryAgentBench.** In ContextBench the agent itself asks for the next operation with `echo READY_FOR_NEXT_OP`. |
 
 ## 2. Our arms, checked against the code

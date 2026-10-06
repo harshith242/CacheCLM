@@ -13,7 +13,7 @@ Hosted APIs are different. Their prompt cache reuses only the start of a request
 All primary arms use the same model (DeepSeek Flash, thinking off), the same text chunks, questions and pinned task block, and a 32K-token context budget. The task block is sent first in every request but is never part of the editable file `ctx.txt`.
 
 1. **Summary.** When the context passes 75% of the budget, one call compacts everything except the last 2 chunks into a summary of at most about 1,500 words.
-2. **CLM.** The model edits `ctx.txt` with shell commands between chunks. Its prompt ports the paper's guidance: think first, prefer one large edit, be generous, and remember that an edit makes everything after it be re-read.
+2. **CLM.** The model edits `ctx.txt` with shell commands between chunks. Its prompt carries the paper's guidance in our own words: think first, prefer one large edit, be generous, locate text with code instead of retyping it, and remember that an edit makes everything after it be re-read. An edit that would grow the context past the budget is rolled back, as in the paper's default rule.
 3. **CLM + gate.** The same, but each edit must pass the cache-aware gate below. The model sees the gate's reasoning only when it rejects an edit.
 4. **Skill (exploratory).** CLM plus a short skill:
    - **Books:** replace each new part with an event log.
@@ -25,7 +25,11 @@ All primary arms use the same model (DeepSeek Flash, thinking off), the same tex
 - **none:** the questions with no context, the world-knowledge floor;
 - **full:** the whole text in one prompt, the ceiling.
 
-**Forced truncation.** If an arm still overflows, the harness cuts the oldest whole lines of `ctx.txt`.
+**Overflow.**
+- **Edit arms (CacheCLM's own policy, not the paper's behaviour):** an edit arm gets up to 6 attempts to make room for the next part. If it still cannot, it stops reading and answers the questions with the context it has. The log records where it stopped and how many parts it never read.
+- **Summary arm:** if a summary still leaves no room, the harness cuts the oldest whole lines of `ctx.txt` (forced truncation).
+
+**Questions.** Every arm answers under the same query prompt, so neither the editing protocol nor the skill's recipe can affect the answers.
 
 ## The gate
 
@@ -84,6 +88,6 @@ uv run cacheclm report               # results/summary.md, summary.html, accurac
 
 ## Credits
 
-- **Method and context-file format:** Context Language Models (arXiv 2609.37725). Its repository is CC BY-NC 4.0, so no code is copied.
+- **Method and context-file format:** Context Language Models (arXiv 2609.37725, CC BY 4.0). Its repository (`facebookresearch/context-language-models`) is CC BY-NC 4.0. No code or prompt text is copied; some prompt ideas (locate text with code, do not wipe whole regions, the fit rule for growing edits) are paraphrased from it with this attribution.
 - **Data and scoring:** MemoryAgentBench (arXiv 2507.05257), MIT.
 - **Code:** MIT.
