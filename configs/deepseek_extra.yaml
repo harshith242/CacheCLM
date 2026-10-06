@@ -1,0 +1,39 @@
+# Extra sample (2026-10-06): a second EventQA book, editing arms only. Estimated $0.4-0.6 (deepseek_hard's EventQA
+# cost $0.51 for these three arms). The spend file is shared ($3.13 spent before); the cap stops new spend at ~$0.85,
+# below the ~$0.99 account balance.
+data_dir: data/memoryagentbench
+cache_dir: cache/llm
+budget_file: cache/spend.json
+prices: configs/prices.yaml
+runs_dir: runs_ds_extra
+results_dir: results_ds_extra
+budget_usd: 3.98
+context_budget: 10000
+chunk_tokens: 2000
+temperature: 0.3
+repeats: [0]
+max_edits_per_chunk: 3
+max_condense_tries: 3
+edit_max_tokens: 10000      # as in local.yaml, so the two runs differ only in the model
+summary_at: 0.75
+keep_recent_chunks: 2
+summary_words: 600          # scaled with the budget: ~800 tokens + 2 kept parts + the next part stays under 75% of 10K
+summary_max_tokens: 1400      # a summary at its cap + 2 kept parts + the next part stays under 75% of 10K
+nudges: [0.25, 0.5, 0.75]
+query_workers: 8
+agent:
+  model: deepseek-flash
+  base_url: https://api.deepseek.com
+  api_key_env: DEEPSEEK_API_KEY
+  options: {extra_body: {thinking: {type: disabled}}}
+samples: []
+# One more EventQA book for the editing arms only (clm, gate, skill), at the same size as deepseek_hard's: a 41K-token
+# stretch (characters 285K-450K, about 4x the 10K budget) of the 131K version of a second book, with the 30 questions
+# whose events fall in it (located by word matching). The full run never evaluates this row.
+smoke:
+  samples:
+    - {split: Accurate_Retrieval, row: 13, start: 285000, end: 450000, arms: [clm, gate, skill],
+       question_ids: [6, 7, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84,
+                      85, 86, 87, 93, 97]}
+  runs_dir: runs_ds_extra
+  results_dir: results_ds_extra

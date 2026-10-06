@@ -44,3 +44,8 @@ def test_a_sample_spec_can_pick_its_questions_by_number(monkeypatch):
     sample = load({"data_dir": "d"}, {"split": "A", "row": 12, "question_ids": [1, 3]})
     assert (sample.questions, sample.answers) == (["q1", "q3"], [["a1"], ["a3"]])  # only questions about the text shown
     assert sample.sid == "A/12q1-3x2"
+
+
+def test_a_smoke_sample_can_run_only_some_arms():
+    cfg = {"smoke": {"samples": [{"split": "A", "row": 13, "arms": ["clm", "gate", "skill"]}, {"split": "B", "row": 1}]}}
+    assert [arms for _, _, arms in jobs(cfg, smoke=True)] == [("clm", "gate", "skill"), ARMS + REFERENCES]
