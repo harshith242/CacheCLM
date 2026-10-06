@@ -59,14 +59,77 @@ Sources:
 4. **Noise.** One sample per task and 15–50 questions; one EventQA question is worth 0.067. The full run (7 samples) is also small. Report confidence intervals and avoid strong claims.
 5. **Cache accounting.** "Billed" hits depend on the provider: DeepSeek caches in 64-token units, best-effort. The "ideal" hits are our string-prefix model. Both are reported; keep both.
 
-## 5. Recommended before the next paid run
+## 5. Architecture today: one sample through one arm
 
-| Priority | Change | Size |
-|---|---|---|
-| 1 | D1: the paper's "never retype text you keep" rule | Prompt, 2 lines plus a test |
-| 2 | D9: paper-style nudge wording (informational at 25%; no wiping at 50/75%) | Prompt, small |
-| 3 | D6: the paper's `fit` gate for the edit arms (reject edits that end over the budget) | Small code change plus a test |
-| 4 | D2: overflow semantics (needs your decision) | Small to medium code change plus tests |
-| Optional | D8: native tool calls | Medium |
+Everything below happens in `run.py: run_sample` → `stream` (`run.py:74`) for one sample and one arm.
 
-D3, D4, D5, D10, D11, D12 and D13 stay as they are and are documented as scope or conservative choices.
+```
+for each part i of the text (then one last pass with no part):
+    incoming   = tokens of part i (+8 for its header); 0 on the last pass
+    turns_left = parts still to come + number of questions
+
+    summary arm:  summary_step (arms.py:130)
+                    if context + incoming > 75% of budget:
+                        blocks before the last `keep` parts  ->  one summary block (one LLM call)
+    edit arms:    edit_phase (arms.py:87), a loop:
+                    over  = context + incoming > budget
+                    limit = 3 edits, or 3 + 3 while over                  (arms.py:96)
+                    note  = control(...): usage line; OVER LIMIT every call while over;
+                            a nudge on the first call after crossing 25/50/75%;
+                            the last result; edits left               (arms.py:69)
+                    reply = LLM(system + task + ctx.txt + note)
+                    no command (READY) -> phase ends
+                    cut off with no command -> phase ends, no retry
+                    else run the command in the sandbox on ctx.txt
+                         an emptied file is rolled back
+                         gate.decide -> enforced for gate; logged only for clm and skill (arms.py:120-121)
+                         result (+ "ctx.txt did not change", + rejection reason) -> next note
+    fit (arms.py:149), ALL arms:
+        while context + incoming > budget: cut the oldest whole lines (forced truncation)
+    append part i to ctx.txt
+
+then answer_all: each question in its own call on the frozen context
+```
+
+**Where overflow is handled today.** The edit arms get up to 6 calls to make room (3 normal, 3 condense). Then `fit` cuts the oldest lines until the part fits, and the run continues to the next part. The summary arm relies on `summary_step`, with `fit` as a fallback.
+
+## 6. Overflow: options
+
+The question: an edit arm has used all its condense tries and the next part still does not fit. What happens?
+
+| | A. Keep the forced cut (today) | B. Paper style, 6 tries | C. Paper style, 3 tries |
+|---|---|---|---|
+| Condense tries while over | 3 | **6** (the paper's BrowseComp-Plus setting; their default is 50) | 3 |
+| Still over after the tries | `fit` cuts the oldest lines; streaming continues | **Streaming stops.** The remaining parts are never read, and the questions are answered on the current context ("graded as-is", as in the paper's final turn) | Same as B |
+| Harness truncation of edit arms | Yes | **No** (as in the paper) | No |
+| Summary arm | `fit` fallback | Keeps the `fit` fallback (Codex-style compaction has no model failure to hide; `fit` only fires if the summary itself is too long) | Same as B |
+| What it measures | The model's edits plus a "keep newest" safety net | The model's own context management only | Same, with less chance to recover |
+| Bias | Hides edit failures. "Keep newest" suits fact lists, so it inflates fact accuracy for weak editors. A front cut rebills the whole context, charged to the arm | A failing model loses every remaining part: harsh, but that is the paper's semantics | Harsher than B; cheaper per failure |
+| Extra cost per failure | none | up to 3 more calls | none |
+| Code change | none | `edit_phase` returns an "overflowed" flag (or raises a small exception); `stream` stops, logs `{"event": "overflow_stop", "part": i}`, and skips `fit` for edit arms; `max_condense_tries: 6` in the configs; report counts `overflow_stop` next to forced truncations | Same as B, without the config change |
+
+**My recommendation: B.** It is the paper's semantics, so a CLM failure shows up as a CLM failure. The 3 extra tries cost little on DeepSeek. Keeping `fit` for the summary arm keeps the baseline as in the paper (Codex compaction never fails silently). If B leaves too many runs stopped early on a weak model, that is a real result about the model, not about the harness.
+
+## 7. Fixes I propose to make (code and tests, no paid calls)
+
+| # | Fix | Exact change | Test | Why |
+|---|---|---|---|---|
+| F1 | **No-retype rule** (D1) | In `EDITING` (`arms.py:18`), replace the text-block line with: "Locate the text you change with code (python3 or sed on the `[[CTX_TURN ...]]` headers); never paste or retype text you keep. Use a ```` ```text ```` block only for new text, such as notes or a short summary that replaces a region." | The prompt contains the rule; a whole-context rewrite still runs (the rule is advice, not enforced) | The paper's own rule. Rewrites drove DeepSeek's cost and its cut-offs |
+| F2 | **Nudge wording** (D9) | In `control` (`arms.py:78`): at 25%, "Context is at ~25% of your budget." (informational, no how-to). At 50/75%, "Context is over N% full. Compact settled regions with a short, specific summary; do not wipe whole regions you may need later." | Wording per tier; still once per crossing | The paper found how-to advice at 25% triggers wholesale deletion; Qwen ended its fact runs with only 1,000–1,700 of 4,000 tokens used |
+| F3 | **Growth gate** (D6) | In `edit_phase`, before the gate: if the edit grows the context and the result exceeds the budget, roll it back with "edit rejected: it grew the context past the N-token limit", for all edit arms (the paper's default `fit`) | A growing edit that fits is kept; one that overflows is rolled back and reported | Matches the paper's default; stops edits like Qwen's 15,919 → 43,596 characters |
+| F4 | **Overflow, option B** (§6) | As in the table above | The stream stops after 6 failed condense tries; questions are still answered; no `fit` for edit arms; the summary arm is unchanged | Paper semantics; removes the "keep newest" confound |
+| F5 | **Report** | Count `overflow_stop` per arm, and show the `full` ceiling next to each task | Report test | So a low ceiling (Qwen facts: 0.46) is visible before arms are compared |
+
+**Not proposed now:**
+- **D8, native tool calls.** It is closer to the paper, but it is a larger change to prompts and parsing. Every parsing bug found so far is fixed and tested. I would do it before a full run if the budget allows.
+- **D3, D4, D5, D10, D11, D12, D13.** They stay as they are. They are scope decisions or conservative choices, documented in §3.
+
+**Effect on runs already made.** F1–F4 change prompts and behaviour, so the DeepSeek smokes and the local runs are no longer comparable with runs after the fixes. The small DeepSeek run (`configs/deepseek_small.yaml`, about $0.5–1.0) should be rerun from scratch after the fixes, with `runs_ds_small` moved aside.
+
+## 8. For the reviewer
+
+Please check in particular:
+1. **F1 wording.** Does "never retype text you keep" still let the skill arm write its event logs? Those are new text that replaces a part, so they should be allowed.
+2. **Option B fairness.** The edit arms lose `fit` but the summary arm keeps it. Is that fair? The argument: Codex compaction always produces a summary, so `fit` there only trims an over-long summary. It does not replace a missing decision.
+3. **F3.** Should the growth gate also apply to the `gate` arm? It rejects most growth (no saving, positive cost), but a **pure append** costs nothing, so `gate.decide` allows it even while over the limit (`overflow=True`, `len(new) > len(old)`: the overflow branch does not apply, and 0 ≥ 0 passes). So the gate arm can also grow past the budget.
+4. **Section 3.** Is any difference between our code and the paper's harness missing?
