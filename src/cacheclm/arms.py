@@ -38,7 +38,7 @@ SUMMARY_NOTE = "\nParts of a long text are appended to your working context. Whe
 SUMMARIZE = ("The working context is nearly full. Write one summary that replaces every block after the pinned task block "
              "and before the last {keep} parts, in at most {words:,} words. Keep the details most likely to be needed "
              "for later questions: names, events in story order, and facts with their serial numbers. Reply with only "
-             "the summary text.")
+             "the summary text; it is cut off after about {cap:,} words.")
 BLOCK = re.compile(r"```(\w*)\n(.*?)```", re.S)  # one fenced block at a time, so text between blocks is never a block
 SAYS_READY = re.compile(r"""(echo|printf)\s+["']?READY["']?""")
 
@@ -136,7 +136,8 @@ def summary_step(task, body, chat, cfg, incoming, log, repeat=0):
     if parts is None:
         return body
     older, tail = parts
-    prompt = SUMMARIZE.format(keep=cfg["keep_recent_chunks"], words=cfg["summary_words"])
+    cap = int(cfg["summary_max_tokens"] * 0.75) // 10 * 10  # stated like the edit prompt's cap: the model is warned
+    prompt = SUMMARIZE.format(keep=cfg["keep_recent_chunks"], words=cfg["summary_words"], cap=cap)
     messages = [{"role": "system", "content": system("summary", budget, repeat)},
                 {"role": "user", "content": task + body + "\n\n" + prompt}]
     reply = chat(messages, cfg["summary_max_tokens"], "summary")

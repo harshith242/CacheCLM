@@ -85,6 +85,14 @@ def test_summary_arm_compacts_and_scores(tmp_path):
     assert all(s["ctx_tokens"] <= CFG["context_budget"] for s in events(tmp_path, "summary", "step"))
 
 
+def test_the_summary_prompt_states_its_reply_cap_like_the_edit_prompt(tmp_path):
+    prompts = []
+    llm = FakeLLM(lambda t: prompts.append(t) or answers(t) or "SUMMARY")
+    run_sample(sample(), "summary", 0, llm, {**CFG, "summary_max_tokens": 1000}, PRICE, tmp_path)
+    asks = [p for p in prompts if "Write one summary" in p]
+    assert asks and all("cut off after about 750 words" in p for p in asks)  # every fact summary hit the cap unwarned
+
+
 def test_clm_arm_makes_room_itself(tmp_path):
     llm = FakeLLM(lambda t: answers(t) or (DROP_FIRST if "OVER LIMIT" in t else "READY"))
     run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
