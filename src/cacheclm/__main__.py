@@ -34,7 +34,7 @@ def jobs(cfg, smoke):
 
 def load(cfg, spec):
     """The sample a spec names, cut to [start:end] when given (the EventQA smoke uses text no evaluated row covers),
-    with its questions starting at question_start when given (the ones about that text)."""
+    with its questions starting at question_start, or picked by question_ids, when given (the ones about that text)."""
     sample = load_sample(cfg["data_dir"], spec["split"], spec["row"])
     if "start" in spec:
         sample = Sample(f"{sample.sid}[{spec['start']}:{spec['end']}]", sample.source,
@@ -42,6 +42,10 @@ def load(cfg, spec):
     if "question_start" in spec:
         q = spec["question_start"]
         sample = Sample(f"{sample.sid}q{q}", sample.source, sample.context, sample.questions[q:], sample.answers[q:])
+    if "question_ids" in spec:  # questions located in the text shown, when they are not one contiguous run
+        ids = spec["question_ids"]
+        sample = Sample(f"{sample.sid}q{ids[0]}-{ids[-1]}x{len(ids)}", sample.source, sample.context,
+                        [sample.questions[i] for i in ids], [sample.answers[i] for i in ids])
     return sample
 
 

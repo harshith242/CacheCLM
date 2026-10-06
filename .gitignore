@@ -9,3 +9,4 @@ __pycache__/
 .superpowers/
 results_local/
 results_ds_small/
+results_ds_hard/

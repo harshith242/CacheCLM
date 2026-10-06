@@ -41,7 +41,7 @@ SUMMARIZE = ("The working context is nearly full. Write one summary that replace
              "for later questions: names, events in story order, and facts with their serial numbers. Reply with only "
              "the summary text; it is cut off after about {cap:,} words.")
 BLOCK = re.compile(r"```(\w*)\n(.*?)```", re.S)  # one fenced block at a time, so text between blocks is never a block
-SAYS_READY = re.compile(r"""(echo|printf)\s+["']?READY["']?""")
+SAYS_READY = re.compile(r"""(echo|printf)\s+["']?READY["']?|true|:""")  # "nothing to do", as Qwen and DeepSeek say it
 
 
 def system(arm, budget, repeat=0, reply_tokens=16384, fam=None):
@@ -158,9 +158,10 @@ def summary_step(task, body, chat, cfg, incoming, log, repeat=0):
     messages = [{"role": "system", "content": system("summary", budget, repeat)},
                 {"role": "user", "content": task + body + "\n\n" + prompt}]
     reply = chat(messages, cfg["summary_max_tokens"], "summary")
-    log({"event": "summary", "chars_compacted": len(older), "summary_chars": len(reply["content"]),
-         "cut_off": reply.get("finish_reason") == "length"})
-    return block(next_index(body), "summary", reply["content"]) + tail
+    cut_off = reply.get("finish_reason") == "length"
+    summary = reply["content"].rsplit("\n", 1)[0] if cut_off else reply["content"]  # no half-written last line
+    log({"event": "summary", "chars_compacted": len(older), "summary_chars": len(summary), "cut_off": cut_off})
+    return block(next_index(body), "summary", summary) + tail
 
 
 def fit(task, body, incoming, budget, log):

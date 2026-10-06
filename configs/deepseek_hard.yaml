@@ -1,0 +1,43 @@
+# A harder small DeepSeek run (2026-10-06): longer texts, about 4x the budget, after deepseek_small saturated on EventQA.
+# Same model and settings as deepseek_small otherwise. Estimated $0.8-1.5. The spend file is shared with base.yaml
+# ($2.24 spent before); the cap stops new spend at about $1.71, below the ~$1.89 account balance.
+data_dir: data/memoryagentbench
+cache_dir: cache/llm
+budget_file: cache/spend.json
+prices: configs/prices.yaml
+runs_dir: runs_ds_hard
+results_dir: results_ds_hard
+budget_usd: 3.95
+context_budget: 10000
+chunk_tokens: 2000
+temperature: 0.3
+repeats: [0]
+max_edits_per_chunk: 3
+max_condense_tries: 3
+edit_max_tokens: 10000      # as in local.yaml, so the two runs differ only in the model
+summary_at: 0.75
+keep_recent_chunks: 2
+summary_words: 600          # scaled with the budget: ~800 tokens + 2 kept parts + the next part stays under 75% of 10K
+summary_max_tokens: 1400      # a summary at its cap + 2 kept parts + the next part stays under 75% of 10K
+nudges: [0.25, 0.5, 0.75]
+query_workers: 8
+agent:
+  model: deepseek-flash
+  base_url: https://api.deepseek.com
+  api_key_env: DEEPSEEK_API_KEY
+  options: {extra_body: {thinking: {type: disabled}}}
+samples: []
+# Harder than deepseek_small, where EventQA was saturated (every arm 1.00, no context 0.73). Rows the full run does not
+# evaluate. EventQA first, so a budget stop costs the fact task first. EventQA: 41K tokens of the 131K book version
+# (about 4x the 10K budget, 21 parts); the 33 questions whose events fall in characters 285K-450K (located by word
+# matching). Facts: single-hop sh_32k, 34K tokens (about 4x an 8K budget, 17 parts); the summary keeps 1 part, and
+# 800 words (cap 1,800 tokens) + 1 kept part + the next part stays under 75% of 8K.
+smoke:
+  samples:
+    - {split: Accurate_Retrieval, row: 12, start: 285000, end: 450000,
+       question_ids: [45, 47, 48, 49, 50, 51, 54, 55, 56, 57, 58, 59, 60, 61, 62, 64, 65, 66, 69, 70, 71, 72, 77, 78, 79,
+                      80, 81, 82, 83, 85, 86, 96, 97]}
+    - {split: Conflict_Resolution, row: 5, questions: 50, context_budget: 8000, chunk_tokens: 2000, summary_words: 800,
+       summary_max_tokens: 1800, keep_recent_chunks: 1}
+  runs_dir: runs_ds_hard
+  results_dir: results_ds_hard

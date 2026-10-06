@@ -34,3 +34,13 @@ def test_a_sample_spec_overrides_settings_and_picks_where_its_questions_start(mo
     assert sample.sid == "A/12[1:4]q1"  # its own run log, apart from a run of the same text from question 0
     cfg = run_config({"context_budget": 1, "chunk_tokens": 1, "nudges": [0.5]}, spec)
     assert cfg == {"context_budget": 9, "chunk_tokens": 2, "nudges": [0.5]}  # spec keys that are not settings stay out
+
+
+def test_a_sample_spec_can_pick_its_questions_by_number(monkeypatch):
+    from cacheclm import __main__ as main
+    from cacheclm.mab import Sample
+    monkeypatch.setattr(main, "load_sample", lambda d, split, row: Sample(f"{split}/{row}", "eventqa_131072", "abc",
+                                                                         ["q0", "q1", "q2", "q3"], [["a0"], ["a1"], ["a2"], ["a3"]]))
+    sample = load({"data_dir": "d"}, {"split": "A", "row": 12, "question_ids": [1, 3]})
+    assert (sample.questions, sample.answers) == (["q1", "q3"], [["a1"], ["a3"]])  # only questions about the text shown
+    assert sample.sid == "A/12q1-3x2"

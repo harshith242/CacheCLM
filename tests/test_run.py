@@ -54,6 +54,15 @@ def test_a_command_that_only_says_ready_is_ready():
     for reply in ('```bash\necho "READY"\n```', "```bash\necho READY\n```", "```sh\nprintf 'READY'\n```"):
         assert parse_reply(reply)[0] is None  # Qwen often wraps READY in a command; it must not use up an edit
     assert parse_reply('```bash\necho "READY" >> ctx.txt\n```')[0] == 'echo "READY" >> ctx.txt'  # a real edit stays
+    for no_op in ("```bash\ntrue\n```", "```bash\n:\n```"):
+        assert parse_reply(no_op)[0] is None  # DeepSeek answers "nothing to do" with true; it was refused as a command
+
+
+def test_a_cut_off_summary_drops_its_unfinished_last_line(tmp_path):
+    reply = ("12. Paris is the capital of France.\n13. The Nile flows through", "length")
+    run_sample(sample(), "summary", 0, FakeLLM(lambda t: answers(t) or reply), CFG, PRICE, tmp_path)
+    final = done(tmp_path, "summary")["final_context"]
+    assert "Paris is the capital of France." in final and "The Nile flows through" not in final
 
 
 def test_a_python_block_runs_as_a_script_and_prose_between_blocks_is_never_a_command():
