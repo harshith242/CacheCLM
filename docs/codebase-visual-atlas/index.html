@@ -19,7 +19,7 @@
 </style></head>
 <body><main>
 <h1>CacheCLM, drawn</h1>
-<p class="lede">Five hand-drawn pictures of how this repo works, in learning order, each grounded in the source (commit
+<p class="lede">Seven hand-drawn pictures of how this repo works, in learning order, each grounded in the source (commit
 <code>831f3f1</code>; full evidence in <a href="ledger.md">ledger.md</a>). The question the repo tests: when a model edits its
 own context (Context Language Models), does it save billed dollars under hosted prompt caching, and does a cache-aware gate help?</p>
 
@@ -82,6 +82,22 @@ DeepSeek: hit $0.006/M, miss $0.30/M  →  a token after the first change costs 
 <tr><td>Scale at the mouth</td><td>arms.py: edit_phase (103–104); <code>ARMS</code>, <code>UNGATED</code> (10–12)</td><td><code>allow = allow or arm in UNGATED</code>: only <code>gate</code> is stopped.</td></tr>
 <tr><td>Recipe card</td><td>arms.py: SKILL (25–33), system (43–48)</td><td>Books: event log of the newest part every time. Facts: dedupe, then delete the oldest.</td></tr>
 <tr><td>Empty / overflowing crate</td><td>arms.py: REFERENCES (11); run.py: run_sample (109–113)</td><td><code>none</code>: questions with no context. <code>full</code>: the whole text, no budget.</td></tr></table>
+
+
+<h2>5. Where an editing arm's money goes (results)</h2>
+<img src="images/05-where-the-money-goes.png" alt="Four coin towers for book 1, one per arm, sliced into tiny blue hits, red misses and large orange output; Xiaohei, standing on the clm tower, holds up an orange sack of edit replies.">
+<p class="takeaway">Billed cost on book 1, split by DeepSeek's three prices. About 70–76% of an editing arm's bill is output tokens, the model writing its edits. Its cache-miss cost is close to the summary arm's, because the summary arm also rewrites the front of its context when it compacts.</p>
+<table><tr><th>Drawn as</th><th>Source</th><th>What it shows</th></tr>
+<tr><td>Coin towers</td><td>run logs of <code>configs/deepseek_hard.yaml</code>, priced by <a href="../../configs/prices.yaml">prices.yaml</a></td><td>summary 0.001 / 0.040 / 0.030; clm 0.001 / 0.044 / 0.130; gate 0.002 / 0.025 / 0.071; skill 0.003 / 0.055 / 0.187 (hits / misses / output, $).</td></tr>
+<tr><td>Orange sack</td><td>output tokens of <code>phase: edit</code> calls</td><td>The model's THOUGHT, code and notes on every edit call.</td></tr></table>
+
+<h2>6. Two books, one harness (results)</h2>
+<img src="images/06-two-books.png" alt="Two shelves of jars, one per book, filled to each arm's accuracy with a price tag; skill's lids are cracked; Xiaohei compares the gate's two price tags.">
+<p class="takeaway">On book 1 the gate matched clm's accuracy at about half the cost. On book 2 it cost more than clm and was less accurate. Skill stopped reading early on both books. Only the cost pattern held: editing billed more than the summary arm.</p>
+<table><tr><th>Drawn as</th><th>Source</th><th>What it shows</th></tr>
+<tr><td>Book 1 shelf</td><td><a href="../results/ds_hard/summary.md">results/ds_hard</a></td><td>summary 0.91 $0.071; clm 0.91 $0.176; gate 0.91 $0.098; skill 0.94 $0.245.</td></tr>
+<tr><td>Book 2 shelf</td><td><a href="../results/ds_extra/summary.md">results/ds_extra</a></td><td>clm 0.97 $0.147; gate 0.90 $0.158; skill 0.87 $0.081; summary not run.</td></tr>
+<tr><td>Cracked lids</td><td><code>overflow_stop</code> events</td><td>skill stopped with 7, then 13, of 25 parts unread.</td></tr></table>
 
 <h2>Technical reference</h2>
 <h3>Module map (960 lines of Python)</h3>

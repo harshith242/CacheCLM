@@ -4,10 +4,11 @@ Does an AI model that edits its own context still save money on a hosted API tha
 
 This repo tests **Context Language Models (CLMs)** from [Shao et al., Sep 2026](https://arxiv.org/abs/2609.37725) in a setting the paper does not study. A CLM keeps its working context as a file that it edits with shell commands. The paper reports higher accuracy than harness-scheduled summaries, and fewer FLOPs, on a self-hosted server that can reuse cached work after an edit. A hosted API cannot do that, so this repo measures the trade-off in **billed dollars** on DeepSeek Flash. It also tests a **cache-aware gate** that refuses edits whose rebilled cache costs more than they save. The code package and CLI are called `cacheclm`.
 
-**Headline (pilot).** On two MemoryAgentBench tasks, each about 4× the context budget, with DeepSeek Flash:
-- **Book (EventQA):** letting the model edit its context matched the summary baseline's accuracy (0.91) but billed **2.5×** as much. The cache-aware gate kept the same accuracy at **1.4×**.
+**Headline (pilot).** On MemoryAgentBench texts about 4× the context budget, with DeepSeek Flash:
+- **Book (EventQA):** letting the model edit its context matched the summary baseline's accuracy (0.91) but billed **2.5×** as much. The cache-aware gate kept the same accuracy at **1.4×**. On a second book, though, the gate was no cheaper than plain editing.
+- **Where the money goes:** about **70–76%** of an editing arm's bill is the model *writing* its edits (output tokens). Its cache-miss cost is close to the summary arm's. So editing costs more mainly because of what the model writes, not because edits break the cache.
 - **Fact list (FactConsolidation):** the editing arms would not delete facts to make room, so they stopped reading a third of the way in. The summary and gate arms read everything but lost most facts. No arm came close to the whole-text ceiling.
-- **Scale:** this is a pilot, with one sample per task and 33 or 50 questions. All DeepSeek runs here, including smoke tests, cost **$3.13**.
+- **Scale:** this is a pilot: one or two samples per task, 30–50 questions each. All DeepSeek runs here, including smoke tests, cost **$3.51**.
 
 ## How it works
 
@@ -127,6 +128,45 @@ How to read these numbers:
 
 **Cost:** $0.89. Full tables, including every edit attempt's outcome: [`docs/results/ds_hard/summary.md`](docs/results/ds_hard/summary.md).
 
+### A second book, editing arms only
+
+To check whether the book result holds, the three editing arms ran on a second novel. It is EventQA row 13, the same size as before: 41K tokens, about 4× the budget. It has 30 questions. Config: `configs/deepseek_extra.yaml`.
+
+![Two shelves of jars, one per book; each jar is filled to an arm's accuracy and carries its billed cost on a tag; skill's jars have cracked lids because it stopped reading early; Xiaohei holds the gate's two price tags up to compare them](docs/codebase-visual-atlas/images/06-two-books.png)
+
+| Arm | Book 1 accuracy | Book 1 $ | Book 2 accuracy | Book 2 $ |
+|---|---|---|---|---|
+| summary | 0.91 | 0.071 | not run | — |
+| clm | 0.91 | 0.176 | **0.97** | 0.147 |
+| gate | 0.91 | **0.098** | 0.90 | 0.158 |
+| skill | 0.94 (stopped, 7 parts unread) | 0.245 | 0.87 (stopped, 13 parts unread) | 0.081 |
+
+- **The gate's saving did not repeat.** On book 2 it rejected 17 edits, but the model kept writing replacement edits. The gate ended up **more** expensive than clm ($0.158 vs $0.147) and 2 questions less accurate.
+- **Skill stopped reading early on both books,** with 13 of 25 parts unread on book 2, so its cheap $0.081 is not comparable.
+- **clm was the most accurate on book 2** (0.97). With 30 questions, that is 2 questions ahead of the gate.
+
+### Where the money goes
+
+![Four coin towers for book 1, one per arm, each sliced into a tiny blue band of cache hits, a red band of cache misses and a large orange band of output tokens; Xiaohei, standing on the clm tower, holds up an orange sack labelled "edit replies"](docs/codebase-visual-atlas/images/05-where-the-money-goes.png)
+
+The bill of each arm, split by DeepSeek's three prices:
+
+| Book | Arm | Total $ | Cache hits | Cache misses | Output | Output share |
+|---|---|---|---|---|---|---|
+| 1 | summary | 0.071 | 0.001 | 0.040 | 0.030 | 42% |
+| 1 | clm | 0.176 | 0.001 | 0.044 | 0.130 | 74% |
+| 1 | gate | 0.098 | 0.002 | 0.025 | 0.071 | 73% |
+| 1 | skill | 0.245 | 0.003 | 0.055 | 0.187 | 76% |
+| 2 | clm | 0.147 | 0.001 | 0.042 | 0.103 | 70% |
+| 2 | gate | 0.158 | 0.002 | 0.040 | 0.116 | 73% |
+| 2 | skill | 0.081 | 0.002 | 0.025 | 0.054 | 67% |
+
+- **Cache misses are not the main cost.** clm's misses ($0.044) were about the same as the summary arm's ($0.040), because the summary arm also rewrites the front of its context each time it compacts.
+- **Output is the main cost.** It is the THOUGHT, the code and any notes the model writes on every edit call, billed at $1.20 per million tokens, 4× the miss price.
+- **This limits the gate.** It weighs only the cache-miss cost of an edit. The output cost is already spent by the time it decides, and a rejected edit usually leads to another edit reply.
+
+Tables: [`docs/results/ds_extra/summary.md`](docs/results/ds_extra/summary.md). **Cost:** $0.38.
+
 ## Result 2: smaller DeepSeek run (EventQA saturated)
 
 **Setup:** the same arms on smaller texts, about 1.6× the budget: a 16K-token book stretch with 15 questions, and the 6.5K-token fact list with a 4K budget, asked as single-hop and as multi-hop questions. Config: `configs/deepseek_small.yaml`.
@@ -160,7 +200,8 @@ The run found five harness bugs, all fixed since and covered by tests (see below
 ### About context editing under cache billing
 
 - **Rewriting the whole context is the expensive habit.** In an early DeepSeek smoke run, 11 of 17 applied edits rewrote the whole context, and about 30% of edit replies ran into the reply cap. The paper's own prompt says to locate text with code and never retype it. With that rule added, clm billed 1.0–1.9× summary in the small run and 2.5× in the harder one. We have no clean before-and-after comparison on DeepSeek.
-- **A price-aware gate helps when edits are optional.** It halved clm's extra cost on the book. On a fact list under pressure, refusing early edits only moved the deletion later and made it worse.
+- **The bill is mostly what the model writes.** About 70–76% of an editing arm's cost is output tokens. Its cache misses cost about the same as the summary arm's. To make context editing cheaper on a hosted API, cut the model's edit replies (fewer, shorter edits); avoiding cache misses matters less.
+- **A price-aware gate helps only sometimes.** It halved clm's extra cost on the first book, but cost more than clm on the second. It weighs only cache misses, and a rejected edit is often followed by another reply. On a fact list under pressure, refusing early edits only moved the deletion later and made it worse.
 - **Under heavy pressure, the model may stop instead of deleting.** DeepSeek preferred to answer READY while over the limit rather than drop facts. A harness that silently cuts the oldest lines would hide this. We first did that, and Qwen's scores looked good until we found the cut was doing the work, because "keep the newest" suits a fact list where newer facts win.
 - **Summaries of lists become inventories.** The summary arm hit its length cap on most fact summaries, even after the prompt stated the cap. Cut-off summaries lose their newest lines, which are the ones that matter for fact lists.
 
@@ -203,9 +244,10 @@ Needs macOS (edits run under `sandbox-exec`), Python 3.13 and [uv](https://docs.
 ```bash
 uv sync
 uv run python scripts/get_data.py
-uv run pytest                                              # 105 tests
+uv run pytest                                              # 106 tests
 uv run cacheclm smoke --config configs/deepseek_hard.yaml  # Result 1, about $0.9
 uv run cacheclm report --smoke --config configs/deepseek_hard.yaml
+uv run cacheclm smoke --config configs/deepseek_extra.yaml # second book, editing arms only, about $0.4
 uv run cacheclm smoke --config configs/deepseek_small.yaml # Result 2, about $0.3
 uv run cacheclm smoke --config configs/local.yaml          # free, on Ollama with qwen3.5-9b-32k
 uv run cacheclm run                                        # the planned full run (not yet run)

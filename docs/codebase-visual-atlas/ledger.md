@@ -36,6 +36,11 @@ source. One row (L26) is marked `inferred`: it describes the provider's behaviou
 | L29 | Growth check | `src/cacheclm/arms.py: edit_phase` (127–133) | An edit that grows the context past the budget is rolled back, for every edit arm | observed |
 | L30 | Reply parser | `src/cacheclm/arms.py: parse_reply` (56–67) | First bash block, or a python block run as `edit.py`; text blocks become `new.txt`; `echo READY` and `true` mean READY | observed |
 | L31 | Toll and trains | `src/cacheclm/run.py: Recorder.chat` (37–55); `configs/prices.yaml` | Logs billed hits and ideal hits (the prefix shared with the previous request); prices hit $0.006/M, miss $0.30/M | observed (the cache itself is L26, inferred) |
+| R1 | Coin towers (cost split) | `runs_ds_hard/*/Accurate_Retrieval_12_*.jsonl` call records, priced by `configs/prices.yaml` | Book 1 billed $ split into hits / misses / output: summary 0.001 / 0.040 / 0.030; clm 0.001 / 0.044 / 0.130; gate 0.002 / 0.025 / 0.071; skill 0.003 / 0.055 / 0.187 | observed (computed from logs) |
+| R2 | Orange sack (edit replies) | same logs, `completion_tokens` of `phase: edit` calls | Output tokens are 67-76% of an editing arm's bill; their cache-miss cost is close to summary's | observed (computed from logs) |
+| R3 | Book 1 shelf | `docs/results/ds_hard/summary.md` | Row 12, 41K tokens, 33 questions: summary 0.91 $0.071, clm 0.91 $0.176, gate 0.91 $0.098, skill 0.94 $0.245 (stopped at part 18 of 25) | observed |
+| R4 | Book 2 shelf | `docs/results/ds_extra/summary.md` (from `runs_ds_extra`) | Row 13, 41K tokens, 30 questions: clm 0.97 $0.147, gate 0.90 $0.158, skill 0.87 $0.081 (stopped at part 10 of 25); no summary arm run | observed |
+| R5 | Cracked lids (stopped early) | `overflow_stop` events in the same logs | skill stopped reading with 7 (book 1) and 13 (book 2) parts unread | observed |
 
 ## Shot list
 
@@ -47,3 +52,5 @@ source. One row (L26) is marked `inferred`: it describes the provider's behaviou
 | 04 | Four arms, two references | L20, L12, L19, L22, L23 | A 4-scene comic, one crate each. Summary: a press, with Xiaohei carving the brick. clm: free scissors. gate: the scale at the crate's mouth. skill: a recipe card. Footer: an empty crate and an overflowing crate. | The arms differ only in who edits the box and what may stop them. The references bracket the result. |
 
 | 00 | Why an edit costs money on a hosted API | L31, L26, L18 | Two trains pass a toll. An appended wagon is the only one to pay full price; when Xiaohei swaps a wagon in the middle, every wagon after it pays full price. | An edit in the middle turns every later token into a cache miss at 50× the hit price; an append does not. |
+| 05 | Where an editing arm's money goes | R1, R2, L31 | Four coin towers on book 1, one per arm, sliced into tiny blue hits, red misses and orange output; Xiaohei hauls an orange sack labelled "edit replies" onto the clm tower. | The extra cost of model editing is mostly the model writing its edits, not cache misses. |
+| 06 | Two books, one harness | R3, R4, R5 | Two shelves of jars filled to each arm's accuracy, with price tags; skill's jars have cracked lids; Xiaohei measures the jars with a ruler. | The ranking flips between books; only the cost pattern (editing costs more than summary) holds. |
