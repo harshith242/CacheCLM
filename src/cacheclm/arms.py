@@ -15,7 +15,8 @@ EDITING = """
 Your working context is shown in each message: first the task block ([[CTX_TURN 0 role=task pinned]]), which is fixed and is not in any file, then the file ctx.txt, which holds every block after it. Together they hold at most {budget} tokens. Parts of a long text arrive one at a time and are appended to the end of ctx.txt. Between parts you may edit ctx.txt to keep what will matter later: delete or shorten text, or keep notes in a block of your own such as [[CTX_TURN 99 role=notes]].
 How to edit:
 - Start your reply with a short THOUGHT about what to keep and why, then give exactly one shell command in a ```bash block, or one Python script in a ```python block (it runs as python3 edit.py beside ctx.txt).
-- To put new text into ctx.txt (notes, a shortened part), write it in a ```text block before the command. It is saved as new.txt beside ctx.txt, so the command can read it (for example python3 -c "...open('new.txt').read()...") with no quoting problems.
+- Change text where it is: find it with code (python3 or sed, by its [[CTX_TURN ...]] header or a short unique line) and never paste or retype text you keep. Retyping costs output tokens and invites copying mistakes.
+- Write only new text (notes, or a short summary that replaces a region) in a ```text block before the command. It is saved as new.txt beside ctx.txt, so the command can read it (for example python3 -c "...open('new.txt').read()...") with no quoting problems.
 - Only ctx.txt is kept: the command must write its result to ctx.txt. new.txt is discarded after the command.
 - An edit makes everything after the edited point be re-read, so prefer one large edit over several small ones, and be generous in what you keep.
 - The whole file is already shown to you: do not run commands that only look at it.
@@ -68,14 +69,17 @@ def parse_reply(reply):
 
 def control(ctx, budget, incoming, crossed, last, edits_left=None):
     """The note after the context: budget use, the overflow warning (every call) or a nudge for a threshold the context
-    has just crossed (once, as in the paper), the last command's result, and the edits left in this phase."""
+    has just crossed (once per crossing), the last command's result, and the edits left in this phase."""
     used = tokens(ctx)
     lines = [f"Context: {used:,} of {budget:,} tokens ({used / budget:.0%}). Next part: {incoming:,} tokens."]
     over = used + incoming - budget
     if over > 0:
         lines.append(f"OVER LIMIT: free at least {over:,} tokens before the next part arrives.")
+    elif crossed and max(crossed) <= 0.25:  # informational only: early how-to advice invites wholesale deletion
+        lines.append(f"Context is at about {max(crossed):.0%} of your budget.")
     elif crossed:
-        lines.append(f"Your context is over {max(crossed):.0%} full.")
+        lines.append(f"Context is over {max(crossed):.0%} full. Shorten parts you are done with into short, specific "
+                     "notes; do not delete whole regions you may still need.")
     if last:
         lines.append(f"Result of your last command:\n{last}")
     if edits_left is not None:
@@ -86,7 +90,8 @@ def control(ctx, budget, incoming, crossed, last, edits_left=None):
 
 def edit_phase(task, body, arm, chat, cfg, incoming, turns_left, price, log, repeat=0, prev_used=0, fam=None):
     """The body after up to max_edits commands, plus up to max_condense more while the next part would not fit.
-    prev_used is the context size at the previous phase's start: a nudge is shown only for thresholds crossed since."""
+    prev_used is the context size after the previous phase's edits: a nudge is shown only for thresholds crossed since,
+    so a threshold crossed again after a compaction fires again. Every reply is logged with one outcome."""
     budget, last, edits = cfg["context_budget"], "", 0
     used = tokens(task + body)
     crossed = [n for n in cfg["nudges"] if prev_used < n * budget <= used]
@@ -104,23 +109,35 @@ def edit_phase(task, body, arm, chat, cfg, incoming, turns_left, price, log, rep
         reply = chat(messages, cfg["edit_max_tokens"], "edit")
         command, files = parse_reply(reply["content"])
         if command is None and reply.get("finish_reason") == "length":
-            log({"event": "cut_off"})  # a retry repeats the same rewrite, so the phase ends here
+            log({"event": "cut_off", "over": over})  # a retry repeats the same rewrite, so the phase ends here
             return body
         if command is None:
-            return body
+            log({"event": "ready", "over": over})
+            if not over:
+                return body
+            edits += 1  # READY while the next part cannot fit uses up a try, as a rolled-back turn does in the paper
+            last = "The next part still does not fit: free space in ctx.txt first."
+            continue
         edits += 1
         new, output = sandbox.run(command, body, files=files)
         new = normalize(new)
         if new == body and not output.startswith("REFUSED"):
             output = f"{output}\nctx.txt did not change.".strip()  # e.g. the result went to new.txt, which is discarded
         emptied = bool(body.strip()) and not HEADER.sub("", new).strip()  # headers alone hold nothing
+        grew_over = len(new) > len(body) and tokens(task + new) + incoming > budget  # the paper's default fit rule
         if emptied:
-            allow, reason, numbers = False, "edit rolled back: it emptied ctx.txt", {}
+            allow, reason, numbers, outcome = False, "edit rolled back: it emptied ctx.txt", {}, "emptied"
+        elif grew_over:
+            allow, reason, numbers = False, f"edit rejected: it grew the context past the {budget:,}-token limit", {}
+            outcome = "rejected_growth"
         else:
             allow, reason, numbers = decide(ctx, task + new, turns_left, price, overflow=over)
             allow = allow or arm in UNGATED  # clm and skill log the gate's verdict but are never stopped by it
-        log({"event": "edit", "command": command, "allowed": allow, "reason": reason, "over": over,
-             "changed": new != body, "refused": output.startswith("REFUSED"), "emptied": emptied,
+            outcome = "applied" if allow else "rejected_price"
+        refused = output.startswith("REFUSED")
+        outcome = "refused" if refused else "no_change" if new == body else outcome
+        log({"event": "edit", "command": command, "allowed": allow, "reason": reason, "over": over, "outcome": outcome,
+             "changed": new != body, "refused": refused, "emptied": emptied,
              "turns_left": turns_left, "chars_before": len(ctx), "chars_after": len(task + new), **numbers})
         if allow:
             body = new

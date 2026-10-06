@@ -17,6 +17,7 @@ REFERENCES = ("none", "full")
 SPLIT = ("prompt", "hit", "ideal", "latency")  # summed per phase, like the costs
 COUNTERS = ("edits", "rejected", "rebilled", "forced", "cut_off")  # happen while streaming: count once per unit
 SUMMED = ("correct", "n", "retention", "resolution")  # per question set: add up across a unit's samples
+OUTCOMES = ("refused", "no_change", "emptied", "rejected_growth", "rejected_price", "applied")  # one per edit command
 
 
 def call_cost(call, price, hit_key):
@@ -62,7 +63,12 @@ def run_row(recs, prices):
            "rebilled": sum(e.get("rebilled_tokens", 0) for e in edits if e["allowed"]),
            "forced": sum(r.get("event") == "forced_truncation" for r in recs),
            "cut_off": sum(r.get("event") == "cut_off" or bool(r.get("event") == "summary" and r.get("cut_off"))
-                          for r in recs)}
+                          for r in recs),
+           "ready": sum(r.get("event") == "ready" for r in recs),
+           "overflow_stops": sum(r.get("event") == "overflow_stop" for r in recs),
+           "unread_parts": sum(r.get("unread_parts", 0) for r in recs if r.get("event") == "overflow_stop"),
+           **{o: sum(r.get("event") == "edit" and r.get("outcome") == o for r in recs) for o in OUTCOMES},
+           "stream_hash": done.get("stream_hash")}
     keys = {"billed": (prices["deepseek"], "cache_hit_tokens"), **{n: (p, "ideal_hit_tokens") for n, p in prices.items()}}
     for part, chosen in (("stream", [c for c in calls if c["phase"] != "query"]),
                          ("query", [c for c in calls if c["phase"] == "query"])):
@@ -75,8 +81,10 @@ def run_row(recs, prices):
 
 def merge(rows):
     """One unit-arm-repeat row: streaming parts once when the unit's samples replayed the same stream, questions summed.
-    If the streams diverged (their costs differ), every stream is a real run, so stream costs are summed instead."""
-    diverged = len({round(r["billed_stream"], 9) for r in rows}) > 1
+    If the streams diverged (different stream fingerprints), every stream is a real run, so stream costs are summed.
+    Logs from before the fingerprint fall back to comparing stream costs."""
+    hashes = {r.pop("stream_hash", None) for r in rows}
+    diverged = len(hashes) > 1 if None not in hashes else len({round(r["billed_stream"], 9) for r in rows}) > 1
     out = {}
     for m in rows[0]:
         values = [r[m] for r in rows]
@@ -186,6 +194,14 @@ def write_report(runs_dir, out_dir, prices):
     for arm in ARMS:
         md.append(f"| {arm} | " + " | ".join(f"{np.mean([data[(u, arm)][n] for u in units]):.4f}" for n in prices)
                   + " |")
+    md += ["", "## Edit attempts (means per unit)", "",
+           "Every edit-phase reply: READY, cut off, or a command with one outcome. Overflow stops are the CacheCLM "
+           "stop-on-overflow policy for edit arms (not the paper's behaviour): the arm read no further parts.", "",
+           "| Arm | Ready | Cut off | Refused | No change | Emptied | Rejected (growth) | Rejected (price) | Applied | "
+           "Overflow stops | Unread parts |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for arm in ARMS[1:]:
+        md.append(f"| {arm} | " + " | ".join(f"{np.mean([data[(u, arm)][m] for u in units]):g}" for m in
+                                              ("ready", "cut_off", *OUTCOMES, "overflow_stops", "unread_parts")) + " |")
     fact_units = [u for u in units if info[u][0] == "factconsolidation"]
     if fact_units:
         md += ["", "## Fact errors: retention (gold fact lost) vs resolution (gold fact kept, wrong answer)", "",

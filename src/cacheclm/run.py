@@ -8,7 +8,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from cacheclm.arms import edit_phase, fit, summary_step, system
+from cacheclm.arms import BASE, edit_phase, fit, summary_step
 from cacheclm.ctxfile import CHARS_PER_TOKEN, append, new_context, tokens
 from cacheclm.files import append_jsonl, read_jsonl
 from cacheclm.mab import MEMORIZE, QUERY, TASK, chunk_text, correct, family, gold_fact
@@ -29,6 +29,7 @@ class Recorder:
     def __init__(self, path, llm, repeat, meta):
         self.path, self.llm, self.repeat, self.meta = path, llm, repeat, meta
         self.ref, self.lock = "", threading.Lock()
+        self.stream = hashlib.sha1()  # fingerprint of every streaming request and reply: identifies a replayed stream
 
     def log(self, record):
         with self.lock:
@@ -41,6 +42,8 @@ class Recorder:
         estimate = len(text) // CHARS_PER_TOKEN  # logged next to billed prompt_tokens to measure the estimate's gap
         shared = len(os.path.commonprefix([reference, text]))
         reply = self.llm.chat(messages, max_tokens, self.repeat)
+        if phase != "query":
+            self.stream.update(f"{text}\0{reply['content']}\0".encode())
         ideal = round(reply["prompt_tokens"] * shared / len(text)) if text else 0  # shared share, in billed tokens
         if ref is None:
             self.ref = text
@@ -53,9 +56,11 @@ class Recorder:
 
 
 def answer_all(ctx, arm, fam, questions, rec, cfg, serial_max=3):
-    """Each question in its own call on the frozen context. The first is compared with the real previous request;
-    questions go one at a time until the provider reports a cache hit (at most serial_max), then in parallel."""
-    head = system(arm, cfg["context_budget"], rec.repeat, cfg["edit_max_tokens"], fam)
+    """Each question in its own call on the frozen context, under one query prompt for every arm (no editing protocol
+    or skill recipe), so answers and their cost do not depend on the arm's instructions. The first question is compared
+    with the real previous request; questions go one at a time until the provider reports a cache hit (at most
+    serial_max), then in parallel."""
+    head = f"Run r{rec.repeat}.\n" + BASE
 
     def ask(q, ref):
         messages = [{"role": "system", "content": head},
@@ -72,7 +77,8 @@ def answer_all(ctx, arm, fam, questions, rec, cfg, serial_max=3):
 
 
 def stream(task, chunks, arm, fam, n_questions, rec, cfg, price, repeat):
-    """The body after every chunk has streamed through the arm's context policy."""
+    """The body after every chunk has streamed through the arm's context policy. An edit arm that cannot make room for
+    the next part stops reading there; the summary arm falls back to the harness cut (fit)."""
     body, budget, prev_used = "", cfg["context_budget"], 0
     for i, chunk in enumerate(chunks + [None]):  # None: one last edit phase after the final part
         text = MEMORIZE[fam].format(chunk=chunk) if chunk is not None else ""
@@ -81,12 +87,15 @@ def stream(task, chunks, arm, fam, n_questions, rec, cfg, price, repeat):
         if arm == "summary":
             if chunk is not None:
                 body = summary_step(task, body, rec.chat, cfg, incoming, rec.log, repeat)
+            body = fit(task, body, incoming, budget, rec.log)  # the harness's own fallback, as for Codex compaction
         else:
-            start = tokens(task + body)
             body = edit_phase(task, body, arm, rec.chat, cfg, incoming, turns_left, price, rec.log, repeat, prev_used,
                               fam)
-            prev_used = start
-        body = fit(task, body, incoming, budget, rec.log)
+            prev_used = tokens(task + body)
+            if prev_used + incoming > budget:  # CacheCLM policy (not the paper's): no harness cut, the reading ends
+                rec.log({"event": "overflow_stop", "policy": "CacheCLM stop-on-overflow", "part": i,
+                         "unread_parts": len(chunks) - i})
+                break
         if chunk is not None:
             body = append(body, "chunk", text)
         rec.log({"event": "step", "chunk": i, "ctx_tokens": tokens(task + body)})
@@ -121,6 +130,7 @@ def run_sample(sample, arm, repeat, llm, cfg, price, runs_dir, question_limit=No
         rec.log({"event": "answer", "qi": qi, "prediction": p, "correct": ok,
                  "gold_fact_present": (fact in ctx) if fact else None})
     accuracy = sum(results) / len(results)
+    rec.stream.update(ctx.encode())
     rec.log({"event": "done", "accuracy": accuracy, "n_questions": len(results), "ctx_tokens_final": tokens(ctx),
-             "unit": unit_id(sample), "family": fam, "final_context": ctx})
+             "unit": unit_id(sample), "family": fam, "final_context": ctx, "stream_hash": rec.stream.hexdigest()})
     return accuracy

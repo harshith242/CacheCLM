@@ -33,18 +33,20 @@ def call(phase, hit, prompt=1000):
             "ideal_hit_tokens": hit, "completion_tokens": 10, "latency_s": 0.1, "cached": False}
 
 
-def fake_run(runs, arm, sample, unit, family, accuracy, stream_hit=900, edits=0, repeat=0, wrong_present=None):
+def fake_run(runs, arm, sample, unit, family, accuracy, stream_hit=900, edits=0, repeat=0, wrong_present=None,
+             stream_hash="h"):
     path = runs / arm / f"{sample.replace('/', '_')}_r{repeat}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     meta = {"arm": arm, "sample": sample, "source": family, "repeat": repeat}
     lines = [{**meta, **call("edit", stream_hit)}, {**meta, **call("query", 990)}]
     lines += [{**meta, "event": "edit", "command": "sed x", "allowed": i % 2 == 0, "reason": "r", "changed": True,
-               "rebilled_tokens": 100, "deleted_tokens": 50} for i in range(edits)]
+               "outcome": "applied" if i % 2 == 0 else "rejected_price", "rebilled_tokens": 100, "deleted_tokens": 50}
+              for i in range(edits)]
     if wrong_present is not None:
         lines.append({**meta, "event": "answer", "qi": 0, "prediction": "x", "correct": False,
                       "gold_fact_present": wrong_present})
     lines.append({**meta, "event": "done", "accuracy": accuracy, "n_questions": 100, "ctx_tokens_final": 5000,
-                  "unit": unit, "family": family, "final_context": "ctx"})
+                  "unit": unit, "family": family, "final_context": "ctx", "stream_hash": stream_hash})
     path.write_text("".join(json.dumps(r) + "\n" for r in lines))
 
 
@@ -94,7 +96,8 @@ def test_a_unit_whose_streams_diverged_sums_its_streams(tmp_path):
     runs = tmp_path / "runs"
     for arm, acc, hit in ARM_ACC:
         fake_run(runs, arm, "CR/6", "u1", "factconsolidation", acc, hit)
-        fake_run(runs, arm, "CR/2", "u1", "factconsolidation", acc, hit if arm != "clm" else 300)  # clm diverged
+        fake_run(runs, arm, "CR/2", "u1", "factconsolidation", acc, hit if arm != "clm" else 300,
+                 stream_hash="h" if arm != "clm" else "h2")  # clm diverged
     means, _, _, _, _ = load_units(runs, PRICES)
     cost = lambda hit: call_cost(call("edit", hit), PRICES["deepseek"], "cache_hit_tokens")  # noqa: E731
     query = call_cost(call("query", 990), PRICES["deepseek"], "cache_hit_tokens")
@@ -102,3 +105,28 @@ def test_a_unit_whose_streams_diverged_sums_its_streams(tmp_path):
     assert means[("u1", "clm")]["diverged"] == 1 and means[("u1", "summary")]["diverged"] == 0
     write_report(runs, tmp_path / "out", PRICES)
     assert "Diverged streams (costs summed): u1 clm" in (tmp_path / "out" / "summary.md").read_text()
+
+
+def test_equal_cost_is_not_the_same_stream(tmp_path):
+    runs = tmp_path / "runs"
+    for arm, acc, hit in ARM_ACC:
+        fake_run(runs, arm, "CR/6", "u1", "factconsolidation", acc, hit)
+        fake_run(runs, arm, "CR/2", "u1", "factconsolidation", acc, hit, stream_hash="h" if arm != "gate" else "h2")
+    means, _, _, _, _ = load_units(runs, PRICES)
+    assert means[("u1", "gate")]["diverged"] == 1 and means[("u1", "clm")]["diverged"] == 0
+
+
+def test_the_report_counts_every_edit_attempt_and_overflow_stop(tmp_path):
+    runs = tmp_path / "runs"
+    for arm, acc, hit in ARM_ACC:
+        fake_run(runs, arm, "CR/6", "f1", "factconsolidation", acc, hit, edits=4)
+    path = runs / "clm" / "CR_6_r0.jsonl"
+    extra = [{"arm": "clm", "sample": "CR/6", "source": "factconsolidation", "repeat": 0, "event": "ready", "over": True},
+             {"arm": "clm", "sample": "CR/6", "source": "factconsolidation", "repeat": 0, "event": "overflow_stop",
+              "part": 3, "unread_parts": 2, "policy": "CacheCLM stop-on-overflow"}]
+    path.write_text("".join(json.dumps(r) + "\n" for r in extra) + path.read_text())
+    write_report(runs, tmp_path / "out", PRICES)
+    text = (tmp_path / "out" / "summary.md").read_text()
+    assert "## Edit attempts" in text
+    assert "| clm | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 2 | 1 | 2 |" in text  # ready, cut_off, refused, no_change, emptied,
+    # rejected_growth, rejected_price, applied, overflow stops, unread parts

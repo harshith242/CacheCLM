@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from cacheclm.arms import ARMS, SKILL, control, parse_reply, system
+from cacheclm.arms import ARMS, REFERENCES, SKILL, control, parse_reply, system
 from cacheclm.budget import BudgetExceeded
 from cacheclm.files import read_jsonl
 from cacheclm.mab import Sample
@@ -106,7 +106,7 @@ def test_gate_rejects_costly_edits_but_allows_them_when_over_the_limit(tmp_path)
     llm = FakeLLM(lambda t: answers(t) or (DROP_FIRST if t.count("role=chunk") >= 2 else "READY"))
     run_sample(sample(), "gate", 0, llm, CFG, PRICE, tmp_path)
     edits = events(tmp_path, "gate", "edit")
-    assert any(not e["allowed"] and "rejected" in e["reason"] for e in edits)
+    assert any(not e["allowed"] and "rejected" in e["reason"] and e["outcome"] == "rejected_price" for e in edits)
     assert any(e["allowed"] and "over the limit" in e["reason"] for e in edits)
 
 
@@ -205,13 +205,88 @@ def test_read_only_and_refused_commands_are_not_changes(tmp_path):
     edits = events(tmp_path, "clm", "edit")
     assert [e["changed"] for e in edits] == [False, False]
     assert [e["refused"] for e in edits] == [False, True]
+    assert [e["outcome"] for e in edits] == ["no_change", "refused"]
 
 
-def test_a_model_that_never_makes_room_is_truncated_to_fit(tmp_path):
+def test_an_edit_arm_that_cannot_make_room_stops_reading_and_still_answers(tmp_path):
     llm = FakeLLM(lambda t: answers(t) or "READY")
     run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
-    assert events(tmp_path, "clm", "forced_truncation")
-    assert all(s["ctx_tokens"] <= CFG["context_budget"] for s in events(tmp_path, "clm", "step"))
+    stop = events(tmp_path, "clm", "overflow_stop")
+    assert len(stop) == 1 and stop[0]["unread_parts"] > 0 and stop[0]["policy"] == "CacheCLM stop-on-overflow"
+    assert not events(tmp_path, "clm", "forced_truncation")  # no harness cut hides the failure
+    over = [r for r in events(tmp_path, "clm", "ready") if r["over"]]
+    assert len(over) == CFG["max_edits_per_chunk"] + CFG["max_condense_tries"]  # READY while over uses up a try
+    assert events(tmp_path, "clm", "done")[0]["n_questions"] == 2  # the questions are still answered
+
+
+def test_the_summary_arm_keeps_the_forced_cut_as_its_fallback(tmp_path):
+    run_sample(sample(), "summary", 0, FakeLLM(lambda t: answers(t) or "S " * 400), CFG, PRICE, tmp_path)
+    assert not events(tmp_path, "summary", "overflow_stop")
+    assert all(s["ctx_tokens"] <= CFG["context_budget"] for s in events(tmp_path, "summary", "step"))
+
+
+def test_every_arm_answers_under_the_same_query_prompt(tmp_path):
+    systems = set()
+
+    class Spy(FakeLLM):
+        def chat(self, messages, max_tokens, repeat):
+            if "Question:" in messages[-1]["content"]:
+                systems.add(messages[0]["content"])
+            return super().chat(messages, max_tokens, repeat)
+    for arm in ARMS + REFERENCES:
+        run_sample(sample(), arm, 0, Spy(lambda t: answers(t) or "READY"), CFG, PRICE, tmp_path)
+    assert len(systems) == 1  # the skill's recipe or the editing protocol must not reach the answers
+
+
+def test_an_edit_that_grows_past_the_limit_is_rolled_back_in_every_edit_arm(tmp_path):
+    inflate = "```bash\npython3 -c \"open('ctx.txt','a').write('w' * 5000)\"\n```"
+    for arm in ("clm", "gate", "skill"):
+        run_sample(sample(), arm, 0, FakeLLM(lambda t: answers(t) or inflate), CFG, PRICE, tmp_path)
+        edits = events(tmp_path, arm, "edit")
+        assert edits and all(e["outcome"] == "rejected_growth" and not e["allowed"] for e in edits)
+    note = "```bash\necho '[[CTX_TURN 99 role=notes]]' >> ctx.txt\n```"
+    commands = iter([note])
+    run_sample(sample(), "clm", 1, FakeLLM(lambda t: answers(t) or next(commands, "READY")), CFG, PRICE, tmp_path)
+    assert [e["outcome"] for e in read_jsonl(run_log(tmp_path, "clm", sample(), 1)) if e.get("event") == "edit"] \
+        == ["applied"]  # growth that still fits is kept, as in the paper's default rule
+
+
+def test_the_prompt_asks_to_locate_text_with_code_instead_of_retyping_it():
+    assert "never paste or retype text you keep" in system("clm", 100)
+
+
+def test_nudges_are_informational_at_25_percent_and_warn_against_wiping_later():
+    quarter = control("x" * 1040, 1000, 10, [0.25], "")
+    assert "about 25% of your budget" in quarter and "do not delete" not in quarter
+    half = control("x" * 2040, 1000, 10, [0.25, 0.5], "")
+    assert "over 50% full" in half and "do not delete whole regions" in half
+
+
+def test_a_nudge_fires_again_after_the_model_compacts_below_it(tmp_path):
+    prompts = []
+
+    class Spy(FakeLLM):
+        def chat(self, messages, max_tokens, repeat):
+            prompts.append(messages[-1]["content"])
+            return super().chat(messages, max_tokens, repeat)
+    run_sample(sample(), "clm", 0, Spy(lambda t: answers(t) or (DROP_FIRST if "over 50% full" in t else "READY")),
+               CFG, PRICE, tmp_path)
+    assert sum("over 50% full" in p for p in prompts) >= 2  # re-armed once the context dropped below 50%
+
+
+def test_every_edit_attempt_has_one_outcome(tmp_path):
+    commands = iter(["```bash\nwc -c ctx.txt\n```", "```bash\ncurl example.com\n```"])
+    run_sample(sample(), "clm", 0, FakeLLM(lambda t: answers(t) or next(commands, "READY")), CFG, PRICE, tmp_path)
+    assert [e["outcome"] for e in events(tmp_path, "clm", "edit")] == ["no_change", "refused"]
+    assert events(tmp_path, "clm", "ready")  # READY is logged too
+
+
+def test_the_done_record_fingerprints_the_stream(tmp_path):
+    for repeat, reply in ((0, "READY"), (1, DROP_FIRST)):
+        run_sample(sample(), "clm", repeat, FakeLLM(lambda t: answers(t) or reply), CFG, PRICE, tmp_path)
+    hashes = [[r for r in read_jsonl(run_log(tmp_path, "clm", sample(), k)) if r.get("event") == "done"][0]
+              ["stream_hash"] for k in (0, 1)]
+    assert all(len(h) == 40 for h in hashes) and hashes[0] != hashes[1]
 
 
 def test_an_interrupted_run_restarts_cleanly(tmp_path):
@@ -356,7 +431,8 @@ def test_a_text_block_reaches_the_command_as_new_txt(tmp_path):
              "```bash\npython3 -c \"t=open('ctx.txt').read(); i=t.rindex('[[CTX_TURN'); "
              "h=t[i:].split(chr(10))[0]; open('ctx.txt','w').write(t[:i]+h+chr(10)+open('new.txt').read())\"\n```")
     once = iter([reply])  # in the final edit phase, so no later truncation can cut the new text
-    script = lambda t: answers(t) or (next(once, "READY") if "Next part: 0 tokens" in t else "READY")  # noqa: E731
+    script = lambda t: answers(t) or (next(once, "READY") if "Next part: 0 tokens" in t  # noqa: E731
+                                      else DROP_FIRST if "OVER LIMIT" in t else "READY")  # makes room, so it reads on
     run_sample(sample(), "skill", 0, FakeLLM(script), CFG, PRICE, tmp_path)
     assert 'Debbie said "no" and wore a green dress.' in done(tmp_path, "skill")["final_context"]
 
@@ -381,5 +457,5 @@ def test_each_budget_nudge_is_shown_once_when_crossed(tmp_path):
             return super().chat(messages, max_tokens, repeat)
 
     run_sample(sample(), "clm", 0, Spy(lambda t: answers(t) or "READY"), CFG, PRICE, tmp_path)
-    for level in ("25%", "50%", "75%"):
-        assert sum(f"Your context is over {level} full." in p for p in prompts) == 1  # the paper nudges on crossing
+    for phrase in ("about 25% of your budget", "over 50% full", "over 75% full"):
+        assert sum(phrase in p for p in prompts) == 1  # once per crossing
