@@ -1,0 +1,43 @@
+# The 3 local-check tasks (configs/local.yaml) on DeepSeek Flash, the paper-scale model, at the same scaled-down budgets,
+# so the local Qwen run and this one differ only in the model. About $0.5-1.0 (estimated from the local run's tokens at
+# DeepSeek prices). The spend file is shared with base.yaml: $1.92 was spent before; the cap stops new spend at ~$1.88,
+# below the ~$2.2 account balance after the top-up.
+data_dir: data/memoryagentbench
+cache_dir: cache/llm
+budget_file: cache/spend.json
+prices: configs/prices.yaml
+runs_dir: runs_ds_small
+results_dir: results_ds_small
+budget_usd: 3.80
+context_budget: 10000
+chunk_tokens: 2000
+temperature: 0.3
+repeats: [0]
+max_edits_per_chunk: 3
+max_condense_tries: 3
+edit_max_tokens: 10000      # as in local.yaml, so the two runs differ only in the model
+summary_at: 0.75
+keep_recent_chunks: 2
+summary_words: 600          # scaled with the budget: ~800 tokens + 2 kept parts + the next part stays under 75% of 10K
+summary_max_tokens: 2000
+nudges: [0.25, 0.5, 0.75]
+query_workers: 8
+agent:
+  model: deepseek-flash
+  base_url: https://api.deepseek.com
+  api_key_env: DEEPSEEK_API_KEY
+  options: {extra_body: {thinking: {type: disabled}}}
+samples: []
+# Rows the full run does not evaluate, with questions that the text shown can answer. The two 6K fact sets share one text,
+# so the second one's editing replays from the cache. A 4K budget makes their 6.5K tokens need editing; the summary is
+# shorter and keeps 1 recent part, so summary, kept part and next part stay under 75% of it. EventQA uses the 131K
+# version of the smoke book: questions 47-61 are the ones whose events fall in characters 285K-349K (matched by words).
+smoke:
+  samples:
+    - {split: Conflict_Resolution, row: 4, questions: 50, context_budget: 4000, chunk_tokens: 1000, summary_words: 300,
+       summary_max_tokens: 1000, keep_recent_chunks: 1}
+    - {split: Conflict_Resolution, row: 0, questions: 50, context_budget: 4000, chunk_tokens: 1000, summary_words: 300,
+       summary_max_tokens: 1000, keep_recent_chunks: 1}
+    - {split: Accurate_Retrieval, row: 12, start: 285000, end: 349000, question_start: 47, questions: 15}
+  runs_dir: runs_ds_small
+  results_dir: results_ds_small

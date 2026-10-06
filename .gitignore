@@ -8,3 +8,4 @@ __pycache__/
 .pytest_cache/
 .superpowers/
 results_local/
+results_ds_small/
