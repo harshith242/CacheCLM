@@ -205,19 +205,6 @@ The run found five harness bugs, all fixed since and covered by tests (see below
 - **Under heavy pressure, the model may stop instead of deleting.** DeepSeek preferred to answer READY while over the limit rather than drop facts. A harness that silently cuts the oldest lines would hide this. We first did that, and Qwen's scores looked good until we found the cut was doing the work, because "keep the newest" suits a fact list where newer facts win.
 - **Summaries of lists become inventories.** The summary arm hit its length cap on most fact summaries, even after the prompt stated the cap. Cut-off summaries lose their newest lines, which are the ones that matter for fact lists.
 
-### About the harness (bugs found by running it, all fixed)
-
-| Problem | Symptom | Fix |
-|---|---|---|
-| Text-block parsing | The closing fence of a text block was read as an empty command | Fenced blocks are parsed one at a time |
-| "Nothing to do" wrappers | Qwen wrapped READY as `echo "READY"`; DeepSeek used `true`; each one used up an edit slot | Both count as READY |
-| Python blocks ignored | A 7,971-token reply in a ```` ```python ```` block was read as READY and thrown away | Python blocks run as `python3 edit.py` |
-| Results written to `new.txt` | `ctx.txt` was unchanged; the reply cache then replayed the same failed command up to 6 times | The note now says "ctx.txt did not change" and shows the edits left, so no two prompts repeat |
-| Arm-specific question prompts | The skill's recipe and the editing protocol reached the answers (found in review) | One question prompt for every arm |
-| Silent forced truncation | It hid edit failures and favoured fact lists | Stop-on-overflow for the editing arms; the cut is kept for the summary arm only |
-| Nudges did not fire again | After a compaction, a threshold crossed again stayed silent | The nudge is measured from the size after the previous phase's edits |
-| Stream identity by cost | Two samples were treated as one stream whenever their costs matched | A stream fingerprint in each run log |
-
 ## Differences from the paper
 
 This is an extension, not a replication. The paper's harness code ([`facebookresearch/context-language-models`](https://github.com/facebookresearch/context-language-models)) was read and compared arm by arm before the DeepSeek runs. The main differences:
