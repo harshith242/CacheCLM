@@ -54,12 +54,12 @@ def parse_command(reply):
     return (m.group(1).strip() or None) if m else None
 
 
-def control(ctx, budget, incoming, nudges, last):
-    """The note after the context: budget use, a nudge or the overflow warning, the last command's result."""
+def control(ctx, budget, incoming, crossed, last):
+    """The note after the context: budget use, the overflow warning (every call) or a nudge for a threshold the context
+    has just crossed (once, as in the paper), and the last command's result."""
     used = tokens(ctx)
     lines = [f"Context: {used:,} of {budget:,} tokens ({used / budget:.0%}). Next part: {incoming:,} tokens."]
     over = used + incoming - budget
-    crossed = [n for n in nudges if used >= n * budget]
     if over > 0:
         lines.append(f"OVER LIMIT: free at least {over:,} tokens before the next part arrives.")
     elif crossed:
@@ -70,15 +70,18 @@ def control(ctx, budget, incoming, nudges, last):
     return "\n".join(lines)
 
 
-def edit_phase(task, body, arm, chat, cfg, incoming, turns_left, price, log, repeat=0):
-    """The body after up to max_edits commands, plus up to max_condense more while the next part would not fit."""
+def edit_phase(task, body, arm, chat, cfg, incoming, turns_left, price, log, repeat=0, prev_used=0):
+    """The body after up to max_edits commands, plus up to max_condense more while the next part would not fit.
+    prev_used is the context size at the previous phase's start: a nudge is shown only for thresholds crossed since."""
     budget, last, edits = cfg["context_budget"], "", 0
+    used = tokens(task + body)
+    crossed = [n for n in cfg["nudges"] if prev_used < n * budget <= used]
     while True:
         ctx = task + body
         over = tokens(ctx) + incoming > budget
         if edits >= cfg["max_edits_per_chunk"] + (cfg["max_condense_tries"] if over else 0):
             return body
-        note = control(ctx, budget, incoming, cfg["nudges"], last)
+        note = control(ctx, budget, incoming, crossed if edits == 0 else [], last)  # a nudge opens the phase only
         messages = [{"role": "system", "content": system(arm, budget, repeat)},
                     {"role": "user", "content": ctx + "\n\n" + note}]
         reply = chat(messages, cfg["edit_max_tokens"], "edit")

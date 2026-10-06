@@ -44,7 +44,7 @@ All three arms share the model, the chunks, the pinned task block, the questions
 
 1. **Summary (baseline).** When the context passes 75% of the budget, one LLM call compacts everything except the pinned blocks and the last 2 chunks into a single summary block. This is Codex-style harness-scheduled compaction, the paper's main baseline.
 2. **CLM.** The model has one bash tool over `ctx.txt`.
-   - Nudges are sent at 25%, 50% and 75% of the budget.
+   - A nudge is sent once when the context first crosses 25%, 50% or 75% of the budget.
    - Before each chunk, the model may run up to 3 edit commands. Edit turns are free and do not count as steps.
    - If the next chunk would overflow the budget, the harness asks the model to condense first, as the paper's rollback-and-condense does.
 3. **CLM + gate.** The same as CLM, plus the cache-aware gate (below) checking every edit.
@@ -266,3 +266,4 @@ The first smoke run (1 sample, 5 questions, $0.30) exposed two bugs and one desi
   - **Cut-offs:** a cut-off reply now ends that edit phase, with no retry.
   - **Gate cost:** the gate now counts every token after an edit's first change (the surviving tail plus any inserted text) as billed once at the miss price. Before, it counted only the surviving tail, so a whole rewrite looked free. A pure append still costs nothing.
   - **Not smoke-tested.** These changes were made without a further smoke run, at the user's choice.
+- **Nudges fire once, on crossing** (after the fourth smoke run). Before, the note repeated "Your context is over N% full" on every edit call once the context passed 25%, which pushed the model to rewrite a context that was only 5-8K tokens. As in the paper, a nudge now appears only on the first edit call after the context crosses a threshold. The over-limit warning still appears on every call while the next part would not fit. Not smoke-tested.

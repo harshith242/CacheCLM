@@ -73,7 +73,7 @@ def answer_all(ctx, arm, fam, questions, rec, cfg, serial_max=3):
 
 def stream(task, chunks, arm, fam, n_questions, rec, cfg, price, repeat):
     """The body after every chunk has streamed through the arm's context policy."""
-    body, budget = "", cfg["context_budget"]
+    body, budget, prev_used = "", cfg["context_budget"], 0
     for i, chunk in enumerate(chunks + [None]):  # None: one last edit phase after the final part
         text = MEMORIZE[fam].format(chunk=chunk) if chunk is not None else ""
         incoming = tokens(text) + 8 if chunk is not None else 0  # +8 for the block header
@@ -82,7 +82,9 @@ def stream(task, chunks, arm, fam, n_questions, rec, cfg, price, repeat):
             if chunk is not None:
                 body = summary_step(task, body, rec.chat, cfg, incoming, rec.log, repeat)
         else:
-            body = edit_phase(task, body, arm, rec.chat, cfg, incoming, turns_left, price, rec.log, repeat)
+            start = tokens(task + body)
+            body = edit_phase(task, body, arm, rec.chat, cfg, incoming, turns_left, price, rec.log, repeat, prev_used)
+            prev_used = start
         body = fit(task, body, incoming, budget, rec.log)
         if chunk is not None:
             body = append(body, "chunk", text)

@@ -330,3 +330,16 @@ def test_the_prompt_states_the_reply_cap_in_words_that_match_the_config():
     cap = yaml.safe_load(open("configs/base.yaml"))["edit_max_tokens"]
     words = int(_re.search(r"cut off after about ([\d,]+) words", system("clm", 100)).group(1).replace(",", ""))
     assert abs(words - cap * 0.75) <= cap * 0.1  # about 0.75 words per token, so the stated limit is real
+
+
+def test_each_budget_nudge_is_shown_once_when_crossed(tmp_path):
+    prompts = []
+
+    class Spy(FakeLLM):
+        def chat(self, messages, max_tokens, repeat):
+            prompts.append(messages[-1]["content"])
+            return super().chat(messages, max_tokens, repeat)
+
+    run_sample(sample(), "clm", 0, Spy(lambda t: answers(t) or "READY"), CFG, PRICE, tmp_path)
+    for level in ("25%", "50%", "75%"):
+        assert sum(f"Your context is over {level} full." in p for p in prompts) == 1  # the paper nudges on crossing
