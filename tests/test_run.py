@@ -50,6 +50,12 @@ def test_parse_command_and_control_note():
     assert "OVER LIMIT" in control("x" * 760, 200, 40, [0.25], "")
 
 
+def test_a_command_that_only_says_ready_is_ready():
+    for reply in ('```bash\necho "READY"\n```', "```bash\necho READY\n```", "```sh\nprintf 'READY'\n```"):
+        assert parse_command(reply) is None  # Qwen often wraps READY in a command; it must not use up an edit
+    assert parse_command('```bash\necho "READY" >> ctx.txt\n```') == 'echo "READY" >> ctx.txt'  # a real edit stays
+
+
 def test_summary_arm_compacts_and_scores(tmp_path):
     llm = FakeLLM(lambda t: answers(t) or "SUMMARY OF EARLIER FACTS")
     acc = run_sample(sample(), "summary", 0, llm, CFG, PRICE, tmp_path)

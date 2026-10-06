@@ -38,6 +38,7 @@ SUMMARIZE = ("The working context is nearly full. Write one summary that replace
              "the summary text.")
 FENCE = re.compile(r"```(?:bash|sh)?\n(.*?)```", re.S)
 TEXT = re.compile(r"```text\n(.*?)```", re.S)
+SAYS_READY = re.compile(r"""(echo|printf)\s+["']?READY["']?""")
 
 
 def system(arm, budget, repeat=0, reply_tokens=16384):
@@ -49,10 +50,11 @@ def system(arm, budget, repeat=0, reply_tokens=16384):
 
 
 def parse_command(reply):
-    """The command in the reply's bash block, or None (READY, no complete block, or an empty one).
-    Text blocks are removed first, so a text block's closing fence is never read as the start of a command."""
+    """The command in the reply's bash block, or None (READY, no complete block, an empty one, or one that only prints
+    READY). Text blocks are removed first, so a text block's closing fence is never read as the start of a command."""
     m = FENCE.search(TEXT.sub("", reply or ""))
-    return (m.group(1).strip() or None) if m else None
+    command = m.group(1).strip() if m else ""
+    return None if not command or SAYS_READY.fullmatch(command) else command
 
 
 def control(ctx, budget, incoming, crossed, last):
