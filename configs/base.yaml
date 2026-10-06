@@ -1,4 +1,4 @@
-# CacheCLM settings (spec docs/specs/2026-10-05-cacheclm-design.md).
+# CacheCLM settings for the planned full run (see README.md).
 data_dir: data/memoryagentbench
 cache_dir: cache/llm
 budget_file: cache/spend.json

@@ -179,7 +179,7 @@ The run found five harness bugs, all fixed since and covered by tests (see below
 
 ## Differences from the paper
 
-This is an extension, not a replication. The full comparison, a reviewer's findings and our responses are in [`docs/audit/2026-10-06-arms-vs-paper.md`](docs/audit/2026-10-06-arms-vs-paper.md). The main differences:
+This is an extension, not a replication. The paper's harness code ([`facebookresearch/context-language-models`](https://github.com/facebookresearch/context-language-models)) was read and compared arm by arm before the DeepSeek runs. The main differences:
 - **Benchmark:** the paper's gains come from agentic tasks, where CLM deletes stale tool output. Our memory streams are mostly signal, so smaller gains are expected.
 - **Our addition:** the paper measures prefix-reuse FLOPs and reports some API costs. It does not decide or evaluate edits by a provider's billed hit, miss and output prices. The gate and the cache-billing comparison are ours.
 - **Overflow:** stop-on-overflow is our own policy, though it echoes the paper's rule for its terminal benchmarks ("a request that would exceed [the budget] ends the run").
