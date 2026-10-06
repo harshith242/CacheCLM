@@ -1,0 +1,37 @@
+# Free local check of the harness and the CLM arms with Qwen3.5 9B on Ollama (M3 Pro, 18 GB). Not a result: a 9B model
+# edits differently from DeepSeek Flash. Measured on this laptop: ~240 tokens/s prompt reading (an unchanged prefix is
+# reused from Ollama's cache), ~20 tokens/s output. Everything is scaled down so a run takes about 2 hours:
+# a 10K budget with 2K parts over 8 parts (~16K tokens) of EventQA text that no evaluated row covers, and 5 questions.
+# "Spend" below is simulated: DeepSeek prices applied to Ollama's real prefix-cache hits. No money is spent.
+data_dir: data/memoryagentbench
+cache_dir: cache/llm_local
+budget_file: cache/spend_local.json
+prices: configs/prices.yaml
+runs_dir: runs_local
+results_dir: results_local
+budget_usd: 100.0
+context_budget: 10000
+chunk_tokens: 2000
+temperature: 0.3
+repeats: [0]
+max_edits_per_chunk: 3
+max_condense_tries: 3
+edit_max_tokens: 16384          # as in base.yaml; a 10K context plus this fits the model's 32K window
+summary_at: 0.75
+keep_recent_chunks: 2
+summary_words: 600          # scaled with the budget: ~800 tokens + 2 kept parts + the next part stays under 75% of 10K
+summary_max_tokens: 2000
+nudges: [0.25, 0.5, 0.75]
+query_workers: 1            # one request at a time: parallel requests would each need their own context memory
+agent:
+  model: qwen3.5-9b-32k     # Ollama tag: Qwen3.5 9B Q4_K_M with a 32K window
+  base_url: http://localhost:11434/v1
+  timeout: 1200             # a 16K-token reply at ~20 tokens/s takes ~14 minutes
+  # Thinking off; presence_penalty 0 overrides the model file's 1.5, which would penalize copying text into notes.
+  options: {reasoning_effort: none, presence_penalty: 0}
+samples: []
+smoke:
+  samples:
+    - {split: Accurate_Retrieval, row: 2, start: 285000, end: 349000, questions: 5}
+  runs_dir: runs_local
+  results_dir: results_local

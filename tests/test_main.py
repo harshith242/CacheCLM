@@ -1,4 +1,5 @@
-from cacheclm.__main__ import jobs
+from cacheclm.__main__ import jobs, make_llm
+from cacheclm.budget import Budget
 from cacheclm.arms import ARMS, REFERENCES
 
 CFG = {"repeats": [0], "samples": [{"split": "A", "row": 1}, {"split": "B", "row": 2}],
@@ -14,3 +15,9 @@ def test_full_run_jobs_add_references_once_and_the_extra_repeat():
 
 def test_smoke_jobs_run_every_arm_so_the_references_are_checked_live_once():
     assert [(s["split"], r, arms) for s, r, arms in jobs(CFG, smoke=True)] == [("C", 0, ARMS + REFERENCES)]
+
+
+def test_a_local_agent_needs_no_key_and_waits_long_enough_for_a_slow_reply(tmp_path):
+    agent = {"model": "qwen3.5-9b-32k", "base_url": "http://localhost:11434/v1", "timeout": 1200}
+    llm = make_llm({"agent": agent, "cache_dir": tmp_path, "temperature": 0.3}, {}, Budget(tmp_path / "spend.json", 1.0))
+    assert llm.client.timeout == 1200  # a 16K-token reply at ~20 tokens/s outlasts the hosted default of 300 s

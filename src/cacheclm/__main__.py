@@ -17,8 +17,8 @@ from cacheclm.run import run_sample
 
 def make_llm(cfg, price, budget):
     agent = cfg["agent"]
-    client = openai.OpenAI(base_url=agent["base_url"], api_key=os.environ[agent["api_key_env"]], max_retries=0,
-                           timeout=300)
+    key = os.environ[agent["api_key_env"]] if "api_key_env" in agent else "local"  # a local server needs no key
+    client = openai.OpenAI(base_url=agent["base_url"], api_key=key, max_retries=0, timeout=agent.get("timeout", 300))
     return LLM(agent["model"], client, cfg["cache_dir"], cfg["temperature"], price, agent.get("options"), budget.spend)
 
 
