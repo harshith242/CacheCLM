@@ -1,4 +1,325 @@
-# Audit: CacheCLM arms vs the CLM paper (2026-10-06)
+# Architecture review and CLM audit (2026-10-06)
+
+Status: **major corrections required before another paid run**.
+
+This review separates three sources that the working audit below sometimes
+combines:
+
+- the [Context Language Models paper](https://arxiv.org/html/2609.37725);
+- the official
+  [`facebookresearch/context-language-models`](https://github.com/facebookresearch/context-language-models)
+  repository, whose harness has evolved beyond some paper configurations;
+- the CacheCLM implementation reviewed in `src/cacheclm`.
+
+The project is a useful **extension**, not a replication: it asks whether
+model-directed context editing pays under hosted-API prefix-cache billing on
+MemoryAgentBench, and whether a price-aware edit gate helps.
+
+## Executive verdict
+
+The implementation is small and mostly understandable. `run.py` owns the
+experiment loop, `arms.py` owns context-policy behavior, `gate.py` is a pure
+decision module, and `sandbox.py` is a concrete command adapter. The main
+problem is experimental validity rather than code complexity.
+
+Do not treat the existing arm comparison as final because:
+
+1. query accuracy and query cost are confounded by arm-specific system prompts;
+2. mechanical `fit` truncation can rescue failed edit arms;
+3. the growth rule does not protect all arms;
+4. the audit attributes repository behavior to the paper;
+5. reporting hides some paid edit attempts and infers stream identity from
+   equal aggregate cost.
+
+F1-F5 in the working audit are necessary in part, but they are not sufficient.
+
+## Findings
+
+### High — Query evaluation is not arm-neutral
+
+`answer_all` builds the question system prompt with `system(arm, ...)`
+(`src/cacheclm/run.py:55-62`). Therefore:
+
+- `summary` answers with the summary instruction;
+- `clm` and `gate` answer with the full editing protocol;
+- `skill` also answers with its task-family context-management recipe;
+- `none` and `full` answer with only the base instruction.
+
+The final `ANSWER_NOTE` reduces accidental editing, but it does not remove the
+prompt-content, prompt-length, accuracy, or cache-cost confound. The `skill`
+arm in particular can receive answer-relevant guidance that the other arms do
+not.
+
+**Required correction:** freeze context after streaming and answer every arm
+with one common query prompt. Keep only the repeat salt and task-family query
+template. This must be fixed before interpreting accuracy or billed-dollar
+differences.
+
+### High — The draft conflates paper claims with repository behavior
+
+The paper's Appendix E says:
+
+- CLM receives an editing reminder 2,048 tokens before the budget;
+- BrowseComp-Plus uses a 23,560-token budget, 100 turns, and at most six
+  rollback retries;
+- TerminalBench 2.1 and TBLite end when a request exceeds the budget;
+- EdgeBench rolls back the latest turn up to 50 times.
+
+The current repository instead contains a reusable `BudgetController` with
+25/50/75% tiered nudges, re-arming, an urgent band, `fit`/`shrink` edit gates,
+and benchmark-specific configuration. Its current `configs/bcp.yaml` says
+28,672 tokens, 500 steps, six retries, and a 0.9 urgent band.
+
+These are valid implementation details, but they are not all paper claims.
+The paper/repository discrepancy is version drift and must be stated
+explicitly.
+
+### High — Proposed overflow option B is not paper-faithful
+
+The paper's BrowseComp-Plus behavior rolls back the newest **agent turns** and
+retries up to six times across the run. CacheCLM predicts overflow before an
+incoming stream chunk and has no equivalent agent turn to roll back.
+
+Also, CacheCLM's current limit is:
+
+`max_edits_per_chunk + max_condense_tries`
+
+so the current over-limit maximum is 3 + 3 = 6 edit attempts. Setting
+`max_condense_tries: 6` would produce 3 + 6 = 9 attempts, not six.
+
+Stopping the stream and answering from the retained prefix is a defensible,
+transparent CacheCLM policy, but it should be called **CLM-inspired**, not
+paper semantics. Record the unread chunk count and overflow location.
+
+### High — The growth gate must cover every edit arm
+
+The existing `gate` arm permits a pure append because `rebilled_tokens == 0`
+and `saving == cost == 0` (`src/cacheclm/gate.py:14-25`). While already over
+budget, that append can still be accepted. `clm` and `skill` are explicitly
+ungated (`src/cacheclm/arms.py:10,120-121`).
+
+Apply the repository-style fit rule before the price gate for **all** edit
+arms: reject growth when `task + candidate + incoming` exceeds the enforced
+budget. The price gate remains a second decision for the `gate` arm.
+
+### High — The cost novelty is narrower than stated
+
+The paper's primary metric is prefix-reuse FLOPs, which already charges
+prefill from the first cache mismatch plus decode. It also studies
+cache-efficient serving through Suffix Cache Reuse, and some experiments
+report gateway/API USD.
+
+CacheCLM's actual contribution is narrower and still useful:
+
+> decide whether an edit is worthwhile using hosted-provider cache-hit,
+> cache-miss, and output prices, then evaluate the policy on memory streams.
+
+Do not claim that the paper ignores caching or API cost altogether. Do say
+that its main zero-shot comparisons do not optimize edit acceptance using a
+provider's billed prefix-cache price ratio.
+
+### Medium — The summary baseline comparison is only partially verified
+
+The paper says the summary harness uses Codex prompts and compacts at 75%.
+Appendix D's ContextBench skill says everything except the system and task
+message becomes one summary, described as “a pointer, not an inventory.”
+That supports “keep no recent turns” for that diagnostic setup, but the
+released repository does not provide enough evidence to generalize the exact
+message-retention policy to every headline benchmark.
+
+State that CacheCLM's two-chunk tail is a stronger local baseline, without
+claiming exact equivalence to every paper run.
+
+### Medium — Paid edit attempts are under-reported
+
+`report.run_row` counts only changed edit events
+(`src/cacheclm/report.py:54-64`). Refused commands, no-op commands, malformed
+responses, and some failed attempts still consume output tokens but do not
+appear in “Edits” or “Rejected.”
+
+Report at least: edit calls, runnable commands, changed edits, accepted edits,
+price-gate rejections, sandbox refusals, no-ops, cut-offs, and growth
+rejections.
+
+### Medium — Stream de-duplication uses cost as an identity test
+
+`report.merge` treats equal rounded `billed_stream` values as evidence that
+two samples replayed one identical stream (`src/cacheclm/report.py:76-87`).
+Equal cost is not proof of equal prompts, replies, edits, or final context.
+
+Log a deterministic stream-trajectory hash and merge only matching hashes.
+Otherwise sum the streams and mark the unit as diverged.
+
+### Medium — Important harness differences are missing
+
+Add these differences to any final comparison:
+
+- CacheCLM does not retain assistant edit turns or command results as transcript
+  turns; it reconstructs each call from task + current file + control note.
+- CacheCLM does not implement free successful compaction turns. Every runnable
+  command consumes a per-phase edit slot.
+- CacheCLM does not re-arm threshold nudges after compaction, and an over-limit
+  warning suppresses the threshold wording.
+- CacheCLM accepts the first runnable fenced block and does not enforce a
+  THOUGHT section or reject multiple runnable blocks.
+- CacheCLM uses characters / 4 for enforcement; the repository uses tiktoken
+  and calibrates its budget count to provider usage.
+- CacheCLM mechanically cuts oldest lines for every arm after policy execution;
+  the paper does not use this as a universal CLM fallback.
+
+### Medium — Source and license wording needs correction
+
+The arXiv paper is CC BY 4.0; the official code repository is CC BY-NC 4.0.
+The proposed F1/F2 wording closely follows `prompts.yaml` and `budget.py`, so
+“read only, nothing copied” is no longer accurate if that wording is adopted
+verbatim.
+
+Prefer original paraphrasing and cite the repository as inspiration. If exact
+prompt text is copied, preserve attribution and check that the project's
+intended use is compatible with the repository's non-commercial license.
+
+## Architecture assessment
+
+### Current module map
+
+```text
+config / CLI
+    -> run_sample
+       -> stream
+          -> summary_step OR edit_phase
+             -> sandbox.run
+             -> gate.decide
+          -> fit
+       -> answer_all
+       -> Recorder / JSONL
+    -> report.load_units -> report.write_report
+```
+
+- `gate.py` is a deep module: a small interface hides the price decision and
+  keeps the rule testable.
+- `ctxfile.py` provides useful locality for the transcript format and survives
+  the deletion test; removing it would spread header invariants across the
+  runner, arms, and tests.
+- `sandbox.py` is a real seam with one concrete macOS adapter. It has leverage,
+  but portability is currently limited to `sandbox-exec`.
+- `arms.py` has high leverage but low locality around overflow: prompt protocol,
+  reply parsing, sandbox execution, budget control, edit commitment, and gate
+  logging all meet in one loop.
+- `run.py` is the correct orchestration module, but unconditional `fit` after
+  every policy erases arm-specific failure semantics.
+- `budget.py` is shallow but harmless: it isolates persistent spend accounting
+  and locking. Deleting it would move that state into CLI construction without
+  improving the experiment.
+
+### Deepening candidates
+
+**Strong — make overflow an explicit policy outcome.** Today `edit_phase`
+returns only text, so `stream` cannot distinguish READY, exhausted attempts,
+cut-off output, and unresolved overflow. Concentrate those outcomes in the
+context-policy module and let `stream` log and execute the selected experiment
+policy. This improves locality and prevents `fit` from silently changing what
+an arm means.
+
+**Strong — separate streaming prompts from query prompts.** The query phase
+needs one arm-neutral adapter. This creates a clean seam between “how context
+was produced” and “how retained context is evaluated,” increasing leverage and
+removing the largest confound.
+
+**Worth exploring — make edit accounting transactional.** One edit attempt
+should produce one structured record covering parse, sandbox, growth rule,
+price gate, commit, and cost-relevant counters. The interface is the test
+surface; currently tests inspect loosely related JSON fields and can miss paid
+failure modes.
+
+**Worth exploring — identify streams by content, not cost.** A trajectory hash
+would make report de-duplication auditable and remove an implicit coupling
+between billing and statistical units.
+
+## Answers to the original reviewer questions
+
+1. **F1 and skill event logs:** yes, event logs remain possible if the rule
+   forbids retyping retained text but allows new replacement notes. Use original
+   wording and cite the repository inspiration.
+2. **Summary keeps `fit`, edit arms lose it:** defensible only as an explicit
+   experiment policy. It is asymmetric. Report summary forced truncations and
+   do not call the edit-arm stop behavior paper-faithful.
+3. **F3 on the `gate` arm:** yes, required. Run the fit/growth rule for all
+   edit arms before the price-aware decision.
+4. **Missing paper differences:** yes. The omitted items are listed above;
+   the most material are free edit turns, per-benchmark overflow, transcript
+   retention, nudge re-arming, token counting, and native-tool enforcement.
+
+## Revised action plan
+
+Before another paid run:
+
+1. use one common query prompt for all arms and add a regression test;
+2. enforce the growth/fit rule for `clm`, `gate`, and `skill`;
+3. choose and name CacheCLM's overflow policy; remove unconditional `fit` from
+   edit arms if the goal is to expose edit failure;
+4. report overflow location, unread chunks, and all edit-attempt outcomes;
+5. hash stream trajectories before de-duplicating unit cost;
+6. update the comparison language and source attribution;
+7. rerun from fresh run directories because prompt and behavior changes make
+   existing runs incomparable.
+
+Optional paper-alignment work, not required for the hosted-cache research
+question: native tool calls, retained edit transcript, free compaction turns,
+repository-style re-arming nudges, and tokenizer-based budget enforcement.
+
+---
+
+## Response to the review (implementer, 2026-10-06)
+
+Each finding was checked against the code at `1cbb65a` and against the paper PDF
+(arXiv 2609.37725, Appendix E, read from the PDF text). No code has changed yet;
+this section is the plan.
+
+| # | Finding | Why the reviewer raised it | Correct? | Resolution |
+|---|---|---|---|---|
+| 1 | Query evaluation is not arm-neutral | `answer_all` builds its system prompt with `system(arm, ...)` (`run.py:58`). The summary, edit and skill arms answer under different instructions: the skill arm with its recipe, the reference arms with only the base line. | **Yes.** I chose this so the query calls would share the cache prefix with streaming. That optimises cost realism at the price of a confound in both accuracy and prompt length. | One common query prompt for every arm: the base line, `ANSWER_NOTE` and the family's query template, keeping only the `Run r{repeat}` salt. Every arm's first query then misses the cache on its context once. That cost is the same in kind for all arms (at most ~10K tokens × $0.30/M ≈ $0.003) and the report will say so. Test: with the same context, the query messages are identical across all 6 arms. |
+| 2 | The audit mixes paper claims with repository behaviour | My §1 described the repo's `BudgetController` (25/50/75% tiers, urgent band, fit/shrink) as "the paper". | **Yes, verified.** Appendix E says: CLM gets its editing reminder **2,048 tokens before the budget**. BrowseComp-Plus uses a **23,560-token budget, 100 turns**, and up to **six** rollback retries. TB2.1/TBLite **end the run** when a request would exceed the budget. EdgeBench rolls back **up to 50** times. Summary = Codex prompts at 75%. The repo's `bcp.yaml` (28,672 tokens, 500 steps, 0.9 band) is later version drift. | Rewrite §1 with two columns, "paper (Appendix E)" and "repository (current code)", and note the drift. |
+| 3 | Option B is not paper-faithful, and the arithmetic is wrong | The paper rolls back the newest *agent turn*; we have no such turn. Also `limit = max_edits_per_chunk + max_condense_tries`, so setting `max_condense_tries: 6` gives 9 attempts, not 6. | **Yes to both.** My table conflated "6 retries" with the config value. Today the over-limit total is already 3 + 3 = 6 attempts, which matches the paper's BrowseComp-Plus retry count. One nuance in our favour: stopping and grading as-is is the paper's own TB2.1/TBLite rule ("a request that would exceed it ends the run"). | Keep `max_condense_tries: 3` (6 attempts while over). Name the policy **"stop on overflow (CLM-inspired)"**, citing the TB2.1 end-of-run rule and the BrowseComp-Plus retry count, not as paper semantics. Log `{"event": "overflow_stop", "part": i, "unread_parts": n}`. Edit arms lose `fit`; the summary arm keeps it, and its forced truncations stay reported. |
+| 4 | The growth gate must cover every edit arm | `gate.decide` passes a pure append even while over budget: zero rebill, so 0 ≥ 0. clm and skill are ungated. | **Yes**, and confirmed by running `decide(..., overflow=True)` on a growing append: it returns `True`. | Before the price gate, for clm, gate and skill: reject an edit that grows the body **and** leaves `task + new + incoming > budget`. Message: "edit rejected: it grew the context past the limit". Tests: a growing edit that fits is kept, one that overflows is rolled back, and a pure append while over is rejected in the gate arm. |
+| 5 | The cost novelty is narrower than stated | I wrote that the paper "does not study API cache billing" and that its USD estimate has no cache discount. | **Mostly yes.** Prefix-reuse FLOPs already charges from the first mismatch: it is cache-aware compute. The PDF also reports USD per task for Opus and gateway costs, and cumulative API spend in one experiment. What the paper does not do is decide or evaluate edits by a provider's **billed hit/miss/output price ratio**. | Restate the contribution in the reviewer's words: a price-aware edit decision under hosted cache billing, evaluated on memory streams. Remove "does not study API cost" from the audit and the spec. |
+| 6 | The summary baseline is only partly verified | "Codex keeps nothing" came from the ContextBench skill text, not from every benchmark. | **Yes.** Appendix E only says "Codex summarization prompts, compacts at 75%". | Wording: "our summary keeps the last part(s) verbatim; at least in ContextBench the paper's keeps none, so ours is likely the stronger baseline." |
+| 7 | Paid edit attempts are under-reported | `run_row` counts only edit events with `changed` set (`report.py:56`). Refused, no-op and cut-off attempts are invisible in the counts. | **Yes, for the counts.** Dollars were never under-reported: every call, failed or not, is summed into cost. | Every edit attempt gets one `outcome`: `ready`, `cut_off`, `refused`, `no_change`, `emptied`, `rejected_growth`, `rejected_price` or `applied`. The report shows a count per outcome plus edit calls. This is the reviewer's "transactional edit record" in its smallest form. |
+| 8 | Stream de-duplication uses cost as identity | `merge` treats equal rounded `billed_stream` values as "same stream" (`report.py:79`). | **Yes.** It is true by construction today (a replay comes from the cache), but cost is not an identity. | Log a `stream_hash` in `done`: SHA-1 of the stream calls' prompts and replies plus the final context. Merge only on equal hashes; otherwise sum and mark the run as diverged. Test: two runs with equal cost but different replies are not merged. |
+| 9a | Edit turns are not kept; no free compaction turns | These are differences from the paper's transcript model. | **Yes.** Already D3 and D13. | Keep and document; both are listed in the final comparison. |
+| 9b | Nudges do not re-arm | Ours fire when the context crosses a threshold between two phase *starts*. | **Partly yes, and it is a real bug.** Example: phase k starts at 60%, the 50% nudge fires, and the model compacts to 30%. The next phase starts at 50% again, but `prev_used` is still 60%, so no nudge. The paper's tiers re-arm after compaction. | Set `prev_used` to the context size **after** the previous phase's edits, before the part is appended. A threshold crossed again after compaction then fires again. Test: compact below 50%, grow past it, and the nudge appears twice. Note: Appendix E's actual paper rule is one reminder 2,048 tokens before the budget. Our 25/50/75% tiers follow the repo, which the comparison will say. |
+| 9c | The over-limit warning hides the threshold wording | `control` uses `elif`. | **Correct, intended.** While over, the over-limit warning is the more urgent message, as the repo's urgent band also overrides tiers. | Document only. |
+| 9d | No THOUGHT enforcement; the first runnable block wins | The paper's prompt rejects replies without a THOUGHT or with more than one command. | **Correct.** Low impact: rejecting would spend paid calls on format errors. | Document. Revisit with native tool calls (D8). |
+| 9e | Characters ÷ 4 vs calibrated tiktoken | Already D11. | **Correct.** | Document (D11). |
+| 9f | Mechanical `fit` for every arm | Already D2. | **Correct.** | Fixed by item 3. |
+| 10 | Source and license wording | The paper is CC BY 4.0 and the repo is CC BY-NC 4.0. F1/F2 drafted wording close to the repo's `prompts.yaml` and `budget.py`. | **Yes.** Our project is MIT, so non-commercial text must not be copied. | Write F1/F2 prompts in our own words, citing the repo as inspiration in the spec and README. Change "nothing copied" to "nothing copied; prompt ideas paraphrased with attribution". |
+
+**Architecture suggestions.** I agree with both "strong" candidates and fold them into
+items 1 and 3. `edit_phase` returns an explicit outcome (`ready`, `exhausted`,
+`overflow`) instead of text alone, and the query prompt becomes one arm-neutral
+function. The "transactional edit record" is item 7. "Identify streams by content"
+is item 8.
+
+**Final plan before the next paid run.** Each step is test-first, with a commit per
+group:
+
+1. Arm-neutral query prompt (1).
+2. The growth/fit rule for all edit arms (4), the no-retype rule (F1) and the nudge
+   wording (F2), both in our own words (10).
+3. Stop-on-overflow for the edit arms, with 6 attempts while over and the overflow
+   location logged (3). `edit_phase` returns its outcome (architecture).
+4. Nudge re-arm fix (9b).
+5. Edit outcomes and `stream_hash` in logs and report (7, 8).
+6. Documentation: §1 split into paper vs repo (2), contribution wording (5),
+   baseline wording (6), license wording (10), and the kept differences (9a, 9c,
+   9d, 9e).
+7. Rerun the small DeepSeek config from a fresh run directory (about $0.5–1.0)
+   only after you approve.
+
+---
+
+## Appendix: original working audit (superseded where it conflicts above)
+
+# Audit: CacheCLM arms vs the CLM paper (working draft)
 
 Sources:
 - the paper, *Context Language Models* (arXiv 2609.37725, HTML v1);
