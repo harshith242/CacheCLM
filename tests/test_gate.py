@@ -39,3 +39,11 @@ def test_same_length_rewrite_in_the_middle_is_rejected_and_append_passes():
     old = "A" * K + "B" * K + "C" * K
     assert not decide(old, "A" * K + "D" * K + "C" * K, 100, DEEPSEEK)[0]
     assert decide(old, old + "note", 1, DEEPSEEK)[0]
+
+
+def test_a_whole_rewrite_pays_for_the_new_text_it_inserts():
+    old = "T" * K + "X" * (15 * K)  # the gate sees task + body; the body is rewritten from scratch
+    new = "T" * K + "Y" * (8 * K)
+    allow, _, numbers = decide(old, new, turns_left=10, price=DEEPSEEK)
+    assert not allow and numbers["rebilled_tokens"] == 8000  # 8,000 new tokens billed as a miss once
+    assert decide(old, new, turns_left=60, price=DEEPSEEK)[0]  # 7,000 tokens saved on 60 turns outweighs it

@@ -20,7 +20,7 @@ How to edit:
 - The whole file is already shown to you: do not run commands that only look at it.
 - Keep the [[CTX_TURN ...]] header line of every block you keep.
 - Allowed programs: sed, awk, grep, head, tail, cat, wc, echo, printf, mv, cp, python3. No heredocs or $(...); for multi-step edits use python3 -c "..." (the script may span several lines; on this system, in-place sed is sed -i '').
-- Your reply is cut off after about 6,000 words, so plan each reply so the THOUGHT, any text block and the command fit.
+- Your reply is cut off after about 12,000 words, so plan each reply so the THOUGHT, any text block and the command fit.
 - Reply READY when you are done editing."""
 SKILL = """
 
@@ -36,7 +36,6 @@ SUMMARIZE = ("The working context is nearly full. Write one summary that replace
              "and before the last {keep} parts, in at most {words:,} words. Keep the details most likely to be needed "
              "for later questions: names, events in story order, and facts with their serial numbers. Reply with only "
              "the summary text.")
-CUT_OFF = "Your last reply was cut off before the command ended; send a shorter one."
 FENCE = re.compile(r"```(?:bash|sh)?\n(.*?)```", re.S)
 TEXT = re.compile(r"```text\n(.*?)```", re.S)
 
@@ -85,10 +84,8 @@ def edit_phase(task, body, arm, chat, cfg, incoming, turns_left, price, log, rep
         reply = chat(messages, cfg["edit_max_tokens"], "edit")
         command = parse_command(reply["content"])
         if command is None and reply.get("finish_reason") == "length":
-            edits += 1
-            log({"event": "cut_off"})
-            last = CUT_OFF
-            continue
+            log({"event": "cut_off"})  # a retry repeats the same rewrite, so the phase ends here
+            return body
         if command is None:
             return body
         edits += 1

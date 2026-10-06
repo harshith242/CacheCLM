@@ -29,11 +29,13 @@ All primary arms use the same model (DeepSeek Flash, thinking off), the same tex
 
 ## The gate
 
-An edit is allowed only if what it saves on later calls outweighs the cached tokens it forces the provider to re-bill:
+An edit is allowed only if what it saves on later calls outweighs what it costs once. That cost is every token after the edit's first change (the unchanged tail plus any text the edit inserts), which the provider bills as a cache miss on the next call:
 
 ```text
-deleted_tokens × turns_left × hit_price   >=   unchanged_tokens_after_the_edit × (miss_price − hit_price)
+deleted_tokens × turns_left × hit_price   >=   tokens_after_the_first_change × (miss_price − hit_price)
 ```
+
+A pure append (adding notes at the end) touches no cached token and is always allowed.
 
 If the next chunk would not fit otherwise, any edit that shrinks the context is allowed.
 

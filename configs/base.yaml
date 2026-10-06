@@ -12,7 +12,7 @@ temperature: 0.3
 repeats: [0]                # 1 repeat to stay under the $5 cap (decided after the first smoke run)
 max_edits_per_chunk: 3
 max_condense_tries: 3
-edit_max_tokens: 8192           # a safety valve, not part of the method (the paper allows 16,384); prompt A states it as ~6,000 words
+edit_max_tokens: 16384          # the paper's value; a safety valve, not part of the method; prompt A states it as ~12,000 words
 summary_at: 0.75
 keep_recent_chunks: 2
 summary_words: 1500         # ~2K tokens; the 3,000-word target still hit the cap in smoke 2

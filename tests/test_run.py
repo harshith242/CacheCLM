@@ -259,13 +259,14 @@ def test_an_edit_that_empties_ctx_is_rolled_back(tmp_path):
     assert wiped and not wiped[0]["allowed"]
 
 
-def test_a_cut_off_reply_is_not_read_as_ready(tmp_path):
+def test_a_cut_off_reply_ends_the_edit_phase_without_a_retry(tmp_path):
+    # a retry was told "send a shorter one" and repeated the same whole rewrite, three times per step
     replies = iter([("THOUGHT: keep the newest.\n```bash\npython3 -c \"print(1)", "length")])
     llm = FakeLLM(lambda t: answers(t) or next(replies, "READY"))
     run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
     records = [r["event"] for r in read_jsonl(run_log(tmp_path, "clm", sample(), 0))]
     after = records[records.index("cut_off") + 1:]
-    assert next(e for e in after if e in ("call", "step")) == "call"  # same phase asked again, not ended as READY
+    assert next(e for e in after if e in ("call", "step")) == "step"  # no retry in the same phase
 
 
 def test_gate_explains_itself_only_on_rejection(tmp_path):

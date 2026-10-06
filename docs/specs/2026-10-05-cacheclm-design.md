@@ -260,3 +260,9 @@ The first smoke run (1 sample, 5 questions, $0.30) exposed two bugs and one desi
   - An edit that leaves only header lines counts as emptied and is rolled back.
   - Reference arms run after every primary job, so a budget stop costs references first.
 - **Edit replies can carry new text, and the reply cap matches the method** (after the third smoke run). In that run the skill arm hit the 2,048-token reply cap on 41 of 60 EventQA edits. With a ```` ```text ```` block, saved as `new.txt`, it no longer has to quote book text inside a command. The cap was then raised from 2,048 to 8,192 tokens for all CLM arms. Most cut-off replies were whole-context rewrites, and the paper's own harness allows 16,384, so the cap is a safety valve and not part of the method. Prompt A states the limit as a fact ("cut off after about 6,000 words"), not as a rule to edit less, because the paper advises one large edit over many small ones. Cut-off replies are counted in the report.
+- **Whole-context rewrites (after the fourth smoke run, which was stopped).**
+  - **What happened:** the CLM arms mostly rewrote their whole context into one text block, even when not over the limit (clm: 11 of 17 applied edits). Those rewrites were cut off on about 30% of edit replies, even at an 8,192-token cap. Each cut-off was retried twice more with the same rewrite.
+  - **Reply cap:** raised to 16,384 tokens, the paper's value, and stated in prompt A as about 12,000 words. DeepSeek Flash allows up to 384K output tokens.
+  - **Cut-offs:** a cut-off reply now ends that edit phase, with no retry.
+  - **Gate cost:** the gate now counts every token after an edit's first change (the surviving tail plus any inserted text) as billed once at the miss price. Before, it counted only the surviving tail, so a whole rewrite looked free. A pure append still costs nothing.
+  - **Not smoke-tested.** These changes were made without a further smoke run, at the user's choice.
