@@ -1,4 +1,4 @@
-from cacheclm.__main__ import jobs, make_llm
+from cacheclm.__main__ import jobs, load, make_llm, run_config
 from cacheclm.budget import Budget
 from cacheclm.arms import ARMS, REFERENCES
 
@@ -21,3 +21,16 @@ def test_a_local_agent_needs_no_key_and_waits_long_enough_for_a_slow_reply(tmp_p
     agent = {"model": "qwen3.5-9b-32k", "base_url": "http://localhost:11434/v1", "timeout": 1200}
     llm = make_llm({"agent": agent, "cache_dir": tmp_path, "temperature": 0.3}, {}, Budget(tmp_path / "spend.json", 1.0))
     assert llm.client.timeout == 1200  # a 16K-token reply at ~20 tokens/s outlasts the hosted default of 300 s
+
+
+def test_a_sample_spec_overrides_settings_and_picks_where_its_questions_start(monkeypatch):
+    from cacheclm import __main__ as main
+    from cacheclm.mab import Sample
+    monkeypatch.setattr(main, "load_sample", lambda d, split, row: Sample(f"{split}/{row}", "eventqa_131072", "abcdef",
+                                                                         ["q0", "q1", "q2"], [["a0"], ["a1"], ["a2"]]))
+    spec = {"split": "A", "row": 12, "start": 1, "end": 4, "question_start": 1, "context_budget": 9, "chunk_tokens": 2}
+    sample = load({"data_dir": "d"}, spec)
+    assert (sample.context, sample.questions, sample.answers) == ("bcd", ["q1", "q2"], [["a1"], ["a2"]])
+    assert sample.sid == "A/12[1:4]q1"  # its own run log, apart from a run of the same text from question 0
+    cfg = run_config({"context_budget": 1, "chunk_tokens": 1, "nudges": [0.5]}, spec)
+    assert cfg == {"context_budget": 9, "chunk_tokens": 2, "nudges": [0.5]}  # spec keys that are not settings stay out

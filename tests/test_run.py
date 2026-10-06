@@ -327,9 +327,12 @@ def test_a_text_block_reaches_the_command_as_new_txt(tmp_path):
 def test_the_prompt_states_the_reply_cap_in_words_that_match_the_config():
     import re as _re
     import yaml
-    cap = yaml.safe_load(open("configs/base.yaml"))["edit_max_tokens"]
-    words = int(_re.search(r"cut off after about ([\d,]+) words", system("clm", 100)).group(1).replace(",", ""))
-    assert abs(words - cap * 0.75) <= cap * 0.1  # about 0.75 words per token, so the stated limit is real
+    for config in ("configs/base.yaml", "configs/local.yaml"):
+        cap = yaml.safe_load(open(config))["edit_max_tokens"]
+        prompt = system("clm", 100, 0, cap)
+        words = int(_re.search(r"cut off after about ([\d,]+) words", prompt).group(1).replace(",", ""))
+        assert cap * 0.65 <= words <= cap * 0.75  # about 0.75 words per token, rounded down: the stated limit is real
+    assert "about 12,000 words" in system("clm", 100, 0, 16384)  # unchanged text, so cached DeepSeek calls still replay
 
 
 def test_each_budget_nudge_is_shown_once_when_crossed(tmp_path):

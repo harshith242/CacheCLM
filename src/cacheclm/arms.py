@@ -20,7 +20,7 @@ How to edit:
 - The whole file is already shown to you: do not run commands that only look at it.
 - Keep the [[CTX_TURN ...]] header line of every block you keep.
 - Allowed programs: sed, awk, grep, head, tail, cat, wc, echo, printf, mv, cp, python3. No heredocs or $(...); for multi-step edits use python3 -c "..." (the script may span several lines; on this system, in-place sed is sed -i '').
-- Your reply is cut off after about 12,000 words, so plan each reply so the THOUGHT, any text block and the command fit.
+- Your reply is cut off after about {words} words, so plan each reply so the THOUGHT, any text block and the command fit.
 - Reply READY when you are done editing."""
 SKILL = """
 
@@ -40,9 +40,10 @@ FENCE = re.compile(r"```(?:bash|sh)?\n(.*?)```", re.S)
 TEXT = re.compile(r"```text\n(.*?)```", re.S)
 
 
-def system(arm, budget, repeat=0):
-    """The arm's fixed system prompt; the first line keeps repeats from sharing the provider's prompt cache."""
-    editing = EDITING.format(budget=budget)
+def system(arm, budget, repeat=0, reply_tokens=16384):
+    """The arm's fixed system prompt; the first line keeps repeats from sharing the provider's prompt cache.
+    The reply cap is stated in words (0.75 per token, rounded down to a thousand)."""
+    editing = EDITING.format(budget=budget, words=f"{int(reply_tokens * 0.75) // 1000 * 1000:,}")
     extra = {"summary": SUMMARY_NOTE, "clm": editing, "gate": editing, "skill": editing + SKILL}.get(arm, "")
     return f"Run r{repeat}.\n" + BASE + extra
 
@@ -82,7 +83,7 @@ def edit_phase(task, body, arm, chat, cfg, incoming, turns_left, price, log, rep
         if edits >= cfg["max_edits_per_chunk"] + (cfg["max_condense_tries"] if over else 0):
             return body
         note = control(ctx, budget, incoming, crossed if edits == 0 else [], last)  # a nudge opens the phase only
-        messages = [{"role": "system", "content": system(arm, budget, repeat)},
+        messages = [{"role": "system", "content": system(arm, budget, repeat, cfg["edit_max_tokens"])},
                     {"role": "user", "content": ctx + "\n\n" + note}]
         reply = chat(messages, cfg["edit_max_tokens"], "edit")
         command = parse_command(reply["content"])

@@ -55,7 +55,7 @@ class Recorder:
 def answer_all(ctx, arm, fam, questions, rec, cfg, serial_max=3):
     """Each question in its own call on the frozen context. The first is compared with the real previous request;
     questions go one at a time until the provider reports a cache hit (at most serial_max), then in parallel."""
-    head = system(arm, cfg["context_budget"], rec.repeat)
+    head = system(arm, cfg["context_budget"], rec.repeat, cfg["edit_max_tokens"])
 
     def ask(q, ref):
         messages = [{"role": "system", "content": head},

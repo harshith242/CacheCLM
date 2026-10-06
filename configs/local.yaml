@@ -1,7 +1,6 @@
 # Free local check of the harness and the CLM arms with Qwen3.5 9B on Ollama (M3 Pro, 18 GB). Not a result: a 9B model
 # edits differently from DeepSeek Flash. Measured on this laptop: ~240 tokens/s prompt reading (an unchanged prefix is
-# reused from Ollama's cache), ~20 tokens/s output. Everything is scaled down so a run takes about 2 hours:
-# a 10K budget with 2K parts over 8 parts (~16K tokens) of EventQA text that no evaluated row covers, and 5 questions.
+# reused from Ollama's cache), ~20 tokens/s output. Everything is scaled down so the 3 tasks take about 2.5-4 hours.
 # "Spend" below is simulated: DeepSeek prices applied to Ollama's real prefix-cache hits. No money is spent.
 data_dir: data/memoryagentbench
 cache_dir: cache/llm_local
@@ -16,7 +15,7 @@ temperature: 0.3
 repeats: [0]
 max_edits_per_chunk: 3
 max_condense_tries: 3
-edit_max_tokens: 16384          # as in base.yaml; a 10K context plus this fits the model's 32K window
+edit_max_tokens: 10000      # no rewrite of a 10K context needs more; a runaway reply stops after ~8 minutes, not ~14
 summary_at: 0.75
 keep_recent_chunks: 2
 summary_words: 600          # scaled with the budget: ~800 tokens + 2 kept parts + the next part stays under 75% of 10K
@@ -26,12 +25,20 @@ query_workers: 1            # one request at a time: parallel requests would eac
 agent:
   model: qwen3.5-9b-32k     # Ollama tag: Qwen3.5 9B Q4_K_M with a 32K window
   base_url: http://localhost:11434/v1
-  timeout: 1200             # a 16K-token reply at ~20 tokens/s takes ~14 minutes
+  timeout: 1200             # a 10K-token reply at ~20 tokens/s takes ~8 minutes, plus reading the prompt
   # Thinking off; presence_penalty 0 overrides the model file's 1.5, which would penalize copying text into notes.
   options: {reasoning_effort: none, presence_penalty: 0}
 samples: []
+# Rows the full run does not evaluate, with questions that the text shown can answer. The two 6K fact sets share one text,
+# so the second one's editing replays from the cache. A 4K budget makes their 6.5K tokens need editing; the summary is
+# shorter and keeps 1 recent part, so summary, kept part and next part stay under 75% of it. EventQA uses the 131K
+# version of the smoke book: questions 47-61 are the ones whose events fall in characters 285K-349K (matched by words).
 smoke:
   samples:
-    - {split: Accurate_Retrieval, row: 2, start: 285000, end: 349000, questions: 5}
+    - {split: Conflict_Resolution, row: 4, questions: 50, context_budget: 4000, chunk_tokens: 1000, summary_words: 300,
+       summary_max_tokens: 1000, keep_recent_chunks: 1}
+    - {split: Conflict_Resolution, row: 0, questions: 50, context_budget: 4000, chunk_tokens: 1000, summary_words: 300,
+       summary_max_tokens: 1000, keep_recent_chunks: 1}
+    - {split: Accurate_Retrieval, row: 12, start: 285000, end: 349000, question_start: 47, questions: 15}
   runs_dir: runs_local
   results_dir: results_local

@@ -33,12 +33,21 @@ def jobs(cfg, smoke):
 
 
 def load(cfg, spec):
-    """The sample a spec names, cut to [start:end] when given (the EventQA smoke uses text no evaluated row covers)."""
+    """The sample a spec names, cut to [start:end] when given (the EventQA smoke uses text no evaluated row covers),
+    with its questions starting at question_start when given (the ones about that text)."""
     sample = load_sample(cfg["data_dir"], spec["split"], spec["row"])
     if "start" in spec:
         sample = Sample(f"{sample.sid}[{spec['start']}:{spec['end']}]", sample.source,
                         sample.context[spec["start"]:spec["end"]], sample.questions, sample.answers)
+    if "question_start" in spec:
+        q = spec["question_start"]
+        sample = Sample(f"{sample.sid}q{q}", sample.source, sample.context, sample.questions[q:], sample.answers[q:])
     return sample
+
+
+def run_config(cfg, spec):
+    """The config with the spec's own settings (any key the config has, such as context_budget) put over it."""
+    return {**cfg, **{k: v for k, v in spec.items() if k in cfg}}
 
 
 def main():
@@ -60,7 +69,7 @@ def main():
     try:
         for spec, repeat, arms in jobs(cfg, smoke):
             sample = load(cfg, spec)
-            run_cfg = {**cfg, "context_budget": spec.get("context_budget", cfg["context_budget"])}
+            run_cfg = run_config(cfg, spec)
             for arm in arms:
                 try:
                     acc = run_sample(sample, arm, repeat, llm, run_cfg, prices["deepseek"], runs_dir, spec.get("questions"))
