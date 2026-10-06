@@ -284,3 +284,10 @@ The first smoke run (1 sample, 5 questions, $0.30) exposed two bugs and one desi
   - **Results:** `configs/deepseek_small.yaml` cost $0.30. EventQA was saturated (every arm 1.00, no context 0.73), so it could not separate the arms. On facts, skill led (single-hop 0.64; whole text 0.54).
   - **Fixes:** a bare `true` or `:` now counts as READY; DeepSeek uses it for "nothing to do", and it had been refused about 4 times per unit. A summary cut off at its cap drops its unfinished last line.
   - **Harder run:** `configs/deepseek_hard.yaml`. EventQA is 41K tokens, about 4x the 10K budget, with the 33 questions located in that text, picked by the new `question_ids` field. Facts use single-hop sh_32k, 34K tokens, about 4x an 8K budget. The summary caps are sized so a capped summary still leaves room.
+- **Harder DeepSeek run results** (2026-10-06, $0.89; `results_ds_hard/summary.md`). These are pilot numbers: 1 unit per family, 33 and 50 questions.
+  - **EventQA (41K tokens, 4x budget):**
+    - Accuracy: summary, clm and gate 0.91; skill 0.94 (it stopped with 7 of 25 parts unread); full 1.00; none 0.73.
+    - Billed cost vs summary: clm 2.5x, gate 1.4x, skill 3.4x. The gate cut clm's cost by 44% at equal accuracy.
+  - **Facts (34K tokens, 4x budget):**
+    - clm and skill both stopped on overflow at part 6 of 18. They never made room in 6 attempts; they replied READY while over. They scored 0.46, from keeping parts 0-5 verbatim (7 of 9 questions whose gold fact is there) plus guessing (16 of 41 on unread facts, close to none's 0.28 rate). Summary scored 0.36: it read everything but kept only 1 of the 9 early facts. Gate read everything but scored 0.22, with 11 price rejections and 39 missing-fact errors, at 1.7x summary's cost. Full 0.56; none 0.28.
+    - The arms that stopped look cheaper (0.7-0.8x summary) only because they stopped. Their accuracy is not comparable with the arms that read the whole text.
