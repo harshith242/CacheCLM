@@ -11,3 +11,4 @@ results_local/
 results_ds_small/
 results_ds_hard/
 results_ds_extra/
+*.log
