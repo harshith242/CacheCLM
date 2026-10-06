@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CacheCLM Atlas</title>
+<style>
+  :root { --ink:#1b1b1b; --muted:#5b5b5b; --line:#e3e3e3; --bg:#fff; --code:#f5f5f2; --accent:#e8730c; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ink:#e8e8e8; --muted:#a8a8a8; --line:#333; --bg:#151515; --code:#222; } }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 30px; margin: 0 0 4px; } h2 { font-size: 22px; margin: 48px 0 8px; } h3 { font-size: 17px; margin: 24px 0 6px; }
+  p.lede { color: var(--muted); margin-top: 0; }
+  img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 8px 0; display: block; overflow-x: auto; }
+  th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  pre { background: var(--code); padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; }
+  a { color: var(--accent); }
+  .takeaway { border-left: 3px solid var(--accent); padding-left: 12px; }
+</style></head>
+<body><main>
+<h1>CacheCLM, drawn</h1>
+<p class="lede">Four hand-drawn pictures of how this repo works, in learning order, each grounded in the source (commit
+<code>831f3f1</code>; full evidence in <a href="ledger.md">ledger.md</a>). The question the repo tests: when a model edits its
+own context (Context Language Models), does it save billed dollars under hosted prompt caching, and does a cache-aware gate help?</p>
+
+<h2>1. One sample through one arm</h2>
+<img src="images/01-reading-room.png" alt="Pages cut from a book drop one at a time into a fixed-size crate; Xiaohei trims inside with scissors; the lidded crate then faces question cards while a meter's tape runs to a report ledger.">
+<p class="takeaway">Every arm reads the same text one part at a time into a box of fixed size (the context budget). Between parts, the arm's policy shrinks the box; if it still overflows, the oldest lines are cut. After the last part the box is frozen and every question is asked against it, while every call is metered for the cost-vs-accuracy report.</p>
+<table><tr><th>Drawn as</th><th>Source</th><th>What the code does</th></tr>
+<tr><td>Book cutter</td><td><a href="../../src/cacheclm/mab.py">mab.py: chunk_text</a> (64)</td><td>Cuts the text into parts of <code>chunk_tokens × 4</code> characters.</td></tr>
+<tr><td>Pages in flight</td><td><a href="../../src/cacheclm/run.py">run.py: stream</a> (74–92)</td><td>For each part (plus one last pass): policy, then <code>fit</code>, then append the part.</td></tr>
+<tr><td>Crate, pinned card</td><td><a href="../../src/cacheclm/ctxfile.py">ctxfile.py: new_context, append</a> (18–38)</td><td>The task block is sent first but never written to <code>ctx.txt</code>; parts are appended as <code>[[CTX_TURN i role=chunk]]</code> blocks.</td></tr>
+<tr><td>Xiaohei with scissors</td><td><a href="../../src/cacheclm/arms.py">arms.py: edit_phase, summary_step</a> (74–128)</td><td>The arm's policy: model edits (clm, gate, skill) or harness summary (summary).</td></tr>
+<tr><td>Red blade</td><td>arms.py: fit (131–139)</td><td>Forced truncation of the oldest whole lines when the next part will not fit.</td></tr>
+<tr><td>Lidded crate, question cards</td><td>run.py: answer_all (55–71)</td><td>Each question in its own call on the frozen context; serial until a cache hit, then parallel.</td></tr>
+<tr><td>Meter and tape</td><td>run.py: Recorder.chat (37–52)</td><td>Logs billed cache hits and ideal hits (prefix shared with the previous request) for every call.</td></tr>
+<tr><td>Ledger book</td><td><a href="../../src/cacheclm/report.py">report.py: write_report</a> (169–208)</td><td>Accuracy, billed cost, ideal-cache cost repriced under three price sheets.</td></tr></table>
+
+<h2>2. The CLM edit loop</h2>
+<img src="images/02-glass-booth.png" alt="Xiaohei writes a slip with a text block and a bash command and posts it into a sealed glass booth where a mechanical arm edits the ctx.txt scroll; the output is checked, weighed on a scale, and a blue string carries the result back to the note on Xiaohei's wall.">
+<p class="takeaway">The model never touches its context directly. It reads a note (budget use, a nudge the first time a threshold is crossed, an over-limit warning on every call), posts one command into a jail, and the result is checked (emptied? does the gate allow it?) before being fed back in the next note. A reply cut off by the length cap ends the phase without a retry.</p>
+<table><tr><th>Drawn as</th><th>Source</th><th>What the code does</th></tr>
+<tr><td>Wall note</td><td>arms.py: control (58–71); edit_phase (79)</td><td>Budget line; OVER LIMIT every call while the next part won't fit; nudge only for thresholds crossed since the previous phase started.</td></tr>
+<tr><td>Slip (text + bash)</td><td>arms.py: parse_command (51–55), edit_phase (96–97)</td><td><code>```text</code> blocks are stripped, then the <code>```bash</code> command is read; the text block becomes <code>new.txt</code>.</td></tr>
+<tr><td>Clipboard at the door</td><td><a href="../../src/cacheclm/sandbox.py">sandbox.py: check</a> (25–43)</td><td>Only sed, awk, grep, head, tail, cat, wc, echo, printf, mv, cp, python3; no heredocs, <code>$(</code> or backticks.</td></tr>
+<tr><td>Glass booth, padlock</td><td>sandbox.py: run (46–73)</td><td>Temp dir under <code>sandbox-exec</code>: no network, writes only inside, no home reads except Python; 10 s timeout with process-group kill; reads back only a regular file.</td></tr>
+<tr><td>Magnifier</td><td>arms.py: edit_phase (99–100)</td><td>An edit that leaves only header lines is rolled back.</td></tr>
+<tr><td>Scale</td><td><a href="../../src/cacheclm/gate.py">gate.py: decide</a> (13–27)</td><td>The cache-aware gate (image 3).</td></tr>
+<tr><td>Cut slip</td><td>arms.py: edit_phase (89–91)</td><td>No command and <code>finish_reason == "length"</code>: log <code>cut_off</code>, end the phase.</td></tr>
+<tr><td>Blue string</td><td>arms.py: edit_phase (110)</td><td>The command's output (plus the gate's reason when it rejects) goes into the next note.</td></tr></table>
+
+<h2>3. The cache-aware gate</h2>
+<img src="images/03-the-scale.png" alt="A long paper strip, blue and stamped cached on the left, red after an orange mark that Xiaohei draws; deleted scraps fall into a bin; below, a balance scale weighs a few blue coins (saving) against more red coins (cost).">
+<p class="takeaway">A provider bills an unchanged prompt prefix at the cheap hit price. An edit breaks that prefix at its first change, so every token after it is billed once at the miss price on the next call. The gate lets an edit through only if the tokens it frees, times the turns still to come, at the hit price, outweigh that one-time cost. A pure append is free; while over the limit, any shrinking edit passes.</p>
+<pre>allow  if  deleted × turns_left × hit  ≥  rebilled × (miss − hit)
+       or  (over the limit and the edit shrinks the context)
+DeepSeek: hit $0.006/M, miss $0.30/M  →  a token after the first change costs ~49 turns of a deleted token's saving</pre>
+<table><tr><th>Drawn as</th><th>Source</th><th>What the code does</th></tr>
+<tr><td>Orange mark</td><td>gate.py: first_change (8–10)</td><td>Common-prefix length of old and new context.</td></tr>
+<tr><td>Red tail</td><td>gate.py: decide (17)</td><td><code>rebilled</code>: every token after the first change, including inserted text; 0 for a pure append.</td></tr>
+<tr><td>Bin</td><td>gate.py: decide (18)</td><td><code>deleted</code>: how much shorter the context got.</td></tr>
+<tr><td>Pans</td><td>gate.py: decide (19–20, 24)</td><td><code>saving</code> vs <code>cost</code>.</td></tr>
+<tr><td>Lever</td><td>gate.py: decide (22–23)</td><td>Overflow override.</td></tr>
+<tr><td>Price tag</td><td><a href="../../configs/prices.yaml">configs/prices.yaml</a></td><td>DeepSeek list prices; OpenAI and Anthropic for repricing.</td></tr>
+<tr><td>"cached" stamp</td><td>(provider side, <em>inferred</em>)</td><td>The provider's prefix cache is modelled by the gate and Recorder, not implemented here.</td></tr></table>
+
+<h2>4. Four arms, two references</h2>
+<img src="images/04-four-arms.png" alt="Four crates in a row: a press over a crate holding a summary brick; Xiaohei cutting pages freely; Xiaohei offering a slip to a scale at the crate mouth with a rejected slip crossed out; Xiaohei reading a recipe card and writing a numbered event log. Below: an empty crate and an overflowing crate.">
+<p class="takeaway">The arms differ only in who shrinks the box and what can stop them. <b>summary</b>: the harness compacts older parts into one summary at 75%. <b>clm</b>: the model edits freely. <b>gate</b>: the model edits, but the gate can refuse. <b>skill</b>: clm plus a recipe in the system prompt. The gate's verdict is logged for clm and skill but only enforced for gate. <b>none</b> and <b>full</b> are the floor and ceiling.</p>
+<table><tr><th>Drawn as</th><th>Source</th><th>What the code does</th></tr>
+<tr><td>Press, brick</td><td>arms.py: summary_step (113–128); ctxfile.split_for_summary (58–64)</td><td>Past <code>summary_at</code>, older blocks become one summary block; the last <code>keep_recent_chunks</code> parts stay.</td></tr>
+<tr><td>Scissors</td><td>arms.py: edit_phase (74–110)</td><td>Model-written bash edits, up to 3 per part (+3 while over the limit).</td></tr>
+<tr><td>Scale at the mouth</td><td>arms.py: edit_phase (103–104); <code>ARMS</code>, <code>UNGATED</code> (10–12)</td><td><code>allow = allow or arm in UNGATED</code>: only <code>gate</code> is stopped.</td></tr>
+<tr><td>Recipe card</td><td>arms.py: SKILL (25–33), system (43–48)</td><td>Books: event log of the newest part every time. Facts: dedupe, then delete the oldest.</td></tr>
+<tr><td>Empty / overflowing crate</td><td>arms.py: REFERENCES (11); run.py: run_sample (109–113)</td><td><code>none</code>: questions with no context. <code>full</code>: the whole text, no budget.</td></tr></table>
+
+<h2>Technical reference</h2>
+<h3>Module map (960 lines of Python)</h3>
+<table><tr><th>File</th><th>Lines</th><th>Role</th></tr>
+<tr><td><code>__main__.py</code></td><td>85</td><td>CLI <code>cacheclm smoke | run | report</code>; job order; per-sample settings; budget stop.</td></tr>
+<tr><td><code>run.py</code></td><td>125</td><td>One sample × one arm: stream, answer, log; <code>Recorder</code> with billed and ideal cache hits.</td></tr>
+<tr><td><code>arms.py</code></td><td>139</td><td>Prompts (prompt A, skill), control note, edit loop, summary step, forced fit.</td></tr>
+<tr><td><code>gate.py</code></td><td>27</td><td>The cache-aware edit gate.</td></tr>
+<tr><td><code>sandbox.py</code></td><td>73</td><td>Allow-list and <code>sandbox-exec</code> jail for model commands.</td></tr>
+<tr><td><code>ctxfile.py</code></td><td>64</td><td><code>[[CTX_TURN i role=...]]</code> blocks, normalize, cut oldest lines, split for summary.</td></tr>
+<tr><td><code>llm.py</code></td><td>74</td><td>OpenAI-compatible client; disk reply cache (replays free); retries; cost per call.</td></tr>
+<tr><td><code>budget.py</code></td><td>25</td><td>Persisted spend total with a hard cap.</td></tr>
+<tr><td><code>mab.py</code></td><td>110</td><td>MemoryAgentBench rows (SHA-256 pinned), prompts, chunking, scoring, gold-fact lookup.</td></tr>
+<tr><td><code>report.py</code></td><td>208</td><td>Units, paired bootstrap, repricing, fact error split, chart, summary.md/html.</td></tr>
+<tr><td><code>files.py</code></td><td>29</td><td>Atomic writes, JSONL read/append.</td></tr></table>
+<h3>Configs</h3>
+<table><tr><th>File</th><th>Use</th></tr>
+<tr><td><code>configs/base.yaml</code></td><td>DeepSeek Flash run: 32K budget, 4K parts, 16,384-token edit replies, nudges at 25/50/75%, $5 cap; full-run and smoke samples.</td></tr>
+<tr><td><code>configs/local.yaml</code></td><td>Free local check on Ollama <code>qwen3.5-9b-32k</code>: 10K budget (4K for facts), 10,000-token replies, 3 answerable tasks; spend is simulated.</td></tr>
+<tr><td><code>configs/prices.yaml</code></td><td>USD per 1M tokens for DeepSeek, OpenAI, Anthropic.</td></tr></table>
+<h3>Log events (one JSONL per arm × sample × repeat, in <code>runs*/</code>)</h3>
+<p><code>call</code> (tokens, billed and ideal hits, latency, finish reason) · <code>edit</code> (command, allowed, reason, changed, refused, emptied, rebilled/deleted tokens) · <code>cut_off</code> · <code>summary</code> · <code>forced_truncation</code> · <code>step</code> · <code>answer</code> (correct, gold fact present) · <code>done</code> (accuracy, unit, final context).</p>
+<h3>Commands</h3>
+<pre>uv run cacheclm smoke                              # DeepSeek smoke (all 6 arms)
+uv run cacheclm run                                # full run (needs approval and budget)
+uv run cacheclm report [--smoke]
+uv run cacheclm smoke --config configs/local.yaml  # free local check
+uv run pytest -q                                   # 89 tests</pre>
+<p style="color:var(--muted);font-size:14px">Images are deterministic SVG sketches (rough.js) rendered to PNG; sources and <code>render.sh</code> are in <code>src/</code>.</p>
+</main></body></html>
