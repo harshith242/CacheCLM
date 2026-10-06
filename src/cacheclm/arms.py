@@ -14,52 +14,61 @@ BASE = "You are a helpful assistant that can read the context and memorize it fo
 EDITING = """
 Your working context is shown in each message: first the task block ([[CTX_TURN 0 role=task pinned]]), which is fixed and is not in any file, then the file ctx.txt, which holds every block after it. Together they hold at most {budget} tokens. Parts of a long text arrive one at a time and are appended to the end of ctx.txt. Between parts you may edit ctx.txt to keep what will matter later: delete or shorten text, or keep notes in a block of your own such as [[CTX_TURN 99 role=notes]].
 How to edit:
-- Start your reply with a short THOUGHT about what to keep and why, then give exactly one shell command in a ```bash block.
+- Start your reply with a short THOUGHT about what to keep and why, then give exactly one shell command in a ```bash block, or one Python script in a ```python block (it runs as python3 edit.py beside ctx.txt).
 - To put new text into ctx.txt (notes, a shortened part), write it in a ```text block before the command. It is saved as new.txt beside ctx.txt, so the command can read it (for example python3 -c "...open('new.txt').read()...") with no quoting problems.
+- Only ctx.txt is kept: the command must write its result to ctx.txt. new.txt is discarded after the command.
 - An edit makes everything after the edited point be re-read, so prefer one large edit over several small ones, and be generous in what you keep.
 - The whole file is already shown to you: do not run commands that only look at it.
 - Keep the [[CTX_TURN ...]] header line of every block you keep.
 - Allowed programs: sed, awk, grep, head, tail, cat, wc, echo, printf, mv, cp, python3. No heredocs or $(...); for multi-step edits use python3 -c "..." (the script may span several lines; on this system, in-place sed is sed -i '').
 - Your reply is cut off after about {words} words, so plan each reply so the THOUGHT, any text block and the command fit.
 - Reply READY when you are done editing."""
-SKILL = """
-
-# Skill: managing your context
+SKILL = {  # the skill arm gets the recipe for its task's family only (Qwen applied the book recipe to fact lists)
+    "head": "\n\n# Skill: managing your context",
+    "eventqa": """
 ## Book excerpts (questions ask which event comes next, anywhere in the story)
 - Right after a new part arrives, replace it with an event log: one line per event, in story order. Do this for the newest part only, every time a part arrives; never rewrite several parts at once.
 - Each line keeps who did, said, felt or wore what, to or with whom, and where, with exact names and specific details (objects, colours, family relations).
-- Keep every older event log.
+- Keep every older event log.""",
+    "factconsolidation": """
 ## Numbered fact lists (newer facts override older ones)
-- When the context is nearly full, in one python3 edit: delete every fact for which a later fact has the same subject and relation; then, only if still needed, delete the oldest facts."""
+- When the context is nearly full, in one python3 edit: delete every fact for which a later fact has the same subject and relation; then, only if still needed, delete the oldest facts.""",
+}
 SUMMARY_NOTE = "\nParts of a long text are appended to your working context. When it gets full you will be asked to compact older parts into a summary."
 SUMMARIZE = ("The working context is nearly full. Write one summary that replaces every block after the pinned task block "
              "and before the last {keep} parts, in at most {words:,} words. Keep the details most likely to be needed "
              "for later questions: names, events in story order, and facts with their serial numbers. Reply with only "
              "the summary text.")
-FENCE = re.compile(r"```(?:bash|sh)?\n(.*?)```", re.S)
-TEXT = re.compile(r"```text\n(.*?)```", re.S)
+BLOCK = re.compile(r"```(\w*)\n(.*?)```", re.S)  # one fenced block at a time, so text between blocks is never a block
 SAYS_READY = re.compile(r"""(echo|printf)\s+["']?READY["']?""")
 
 
-def system(arm, budget, repeat=0, reply_tokens=16384):
+def system(arm, budget, repeat=0, reply_tokens=16384, fam=None):
     """The arm's fixed system prompt; the first line keeps repeats from sharing the provider's prompt cache.
-    The reply cap is stated in words (0.75 per token, rounded down to a thousand)."""
+    The reply cap is stated in words (0.75 per token, rounded down to a thousand). fam picks the skill's recipe."""
     editing = EDITING.format(budget=budget, words=f"{int(reply_tokens * 0.75) // 1000 * 1000:,}")
-    extra = {"summary": SUMMARY_NOTE, "clm": editing, "gate": editing, "skill": editing + SKILL}.get(arm, "")
+    skill = SKILL["head"] + (SKILL[fam] if fam else SKILL["eventqa"] + SKILL["factconsolidation"])
+    extra = {"summary": SUMMARY_NOTE, "clm": editing, "gate": editing, "skill": editing + skill}.get(arm, "")
     return f"Run r{repeat}.\n" + BASE + extra
 
 
-def parse_command(reply):
-    """The command in the reply's bash block, or None (READY, no complete block, an empty one, or one that only prints
-    READY). Text blocks are removed first, so a text block's closing fence is never read as the start of a command."""
-    m = FENCE.search(TEXT.sub("", reply or ""))
-    command = m.group(1).strip() if m else ""
-    return None if not command or SAYS_READY.fullmatch(command) else command
+def parse_reply(reply):
+    """(command, files to put beside ctx.txt). The command is the first bash block, or a python block run as edit.py;
+    None means READY (no runnable block, an empty one, or one that only prints READY). A text block becomes new.txt."""
+    blocks = BLOCK.findall(reply or "")
+    files = {"new.txt": body for lang, body in blocks if lang == "text"}
+    for lang, body in blocks:
+        if lang in ("bash", "sh", "") and body.strip():
+            command = body.strip()
+            return (None if SAYS_READY.fullmatch(command) else command), files
+        if lang == "python" and body.strip():
+            return "python3 edit.py", {**files, "edit.py": body}
+    return None, files
 
 
-def control(ctx, budget, incoming, crossed, last):
+def control(ctx, budget, incoming, crossed, last, edits_left=None):
     """The note after the context: budget use, the overflow warning (every call) or a nudge for a threshold the context
-    has just crossed (once, as in the paper), and the last command's result."""
+    has just crossed (once, as in the paper), the last command's result, and the edits left in this phase."""
     used = tokens(ctx)
     lines = [f"Context: {used:,} of {budget:,} tokens ({used / budget:.0%}). Next part: {incoming:,} tokens."]
     over = used + incoming - budget
@@ -69,11 +78,13 @@ def control(ctx, budget, incoming, crossed, last):
         lines.append(f"Your context is over {max(crossed):.0%} full.")
     if last:
         lines.append(f"Result of your last command:\n{last}")
-    lines.append("Reply with one shell command in a ```bash block to edit ctx.txt, or READY.")
+    if edits_left is not None:
+        lines.append(f"Edits left before the next part: {edits_left}.")
+    lines.append("Reply with one ```bash command or ```python script that edits ctx.txt, or READY.")
     return "\n".join(lines)
 
 
-def edit_phase(task, body, arm, chat, cfg, incoming, turns_left, price, log, repeat=0, prev_used=0):
+def edit_phase(task, body, arm, chat, cfg, incoming, turns_left, price, log, repeat=0, prev_used=0, fam=None):
     """The body after up to max_edits commands, plus up to max_condense more while the next part would not fit.
     prev_used is the context size at the previous phase's start: a nudge is shown only for thresholds crossed since."""
     budget, last, edits = cfg["context_budget"], "", 0
@@ -82,22 +93,26 @@ def edit_phase(task, body, arm, chat, cfg, incoming, turns_left, price, log, rep
     while True:
         ctx = task + body
         over = tokens(ctx) + incoming > budget
-        if edits >= cfg["max_edits_per_chunk"] + (cfg["max_condense_tries"] if over else 0):
+        limit = cfg["max_edits_per_chunk"] + (cfg["max_condense_tries"] if over else 0)
+        if edits >= limit:
             return body
-        note = control(ctx, budget, incoming, crossed if edits == 0 else [], last)  # a nudge opens the phase only
-        messages = [{"role": "system", "content": system(arm, budget, repeat, cfg["edit_max_tokens"])},
+        # A nudge opens the phase only. The count of edits left also keeps each prompt distinct, so a failed edit is
+        # retried by sampling again rather than by replaying the same cached reply.
+        note = control(ctx, budget, incoming, crossed if edits == 0 else [], last, limit - edits)
+        messages = [{"role": "system", "content": system(arm, budget, repeat, cfg["edit_max_tokens"], fam)},
                     {"role": "user", "content": ctx + "\n\n" + note}]
         reply = chat(messages, cfg["edit_max_tokens"], "edit")
-        command = parse_command(reply["content"])
+        command, files = parse_reply(reply["content"])
         if command is None and reply.get("finish_reason") == "length":
             log({"event": "cut_off"})  # a retry repeats the same rewrite, so the phase ends here
             return body
         if command is None:
             return body
         edits += 1
-        text = TEXT.search(reply["content"])
-        new, output = sandbox.run(command, body, files={"new.txt": text.group(1)} if text else None)
+        new, output = sandbox.run(command, body, files=files)
         new = normalize(new)
+        if new == body and not output.startswith("REFUSED"):
+            output = f"{output}\nctx.txt did not change.".strip()  # e.g. the result went to new.txt, which is discarded
         emptied = bool(body.strip()) and not HEADER.sub("", new).strip()  # headers alone hold nothing
         if emptied:
             allow, reason, numbers = False, "edit rolled back: it emptied ctx.txt", {}

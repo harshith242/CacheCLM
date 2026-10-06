@@ -55,7 +55,7 @@ class Recorder:
 def answer_all(ctx, arm, fam, questions, rec, cfg, serial_max=3):
     """Each question in its own call on the frozen context. The first is compared with the real previous request;
     questions go one at a time until the provider reports a cache hit (at most serial_max), then in parallel."""
-    head = system(arm, cfg["context_budget"], rec.repeat, cfg["edit_max_tokens"])
+    head = system(arm, cfg["context_budget"], rec.repeat, cfg["edit_max_tokens"], fam)
 
     def ask(q, ref):
         messages = [{"role": "system", "content": head},
@@ -83,7 +83,8 @@ def stream(task, chunks, arm, fam, n_questions, rec, cfg, price, repeat):
                 body = summary_step(task, body, rec.chat, cfg, incoming, rec.log, repeat)
         else:
             start = tokens(task + body)
-            body = edit_phase(task, body, arm, rec.chat, cfg, incoming, turns_left, price, rec.log, repeat, prev_used)
+            body = edit_phase(task, body, arm, rec.chat, cfg, incoming, turns_left, price, rec.log, repeat, prev_used,
+                              fam)
             prev_used = start
         body = fit(task, body, incoming, budget, rec.log)
         if chunk is not None:

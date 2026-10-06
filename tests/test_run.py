@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from cacheclm.arms import ARMS, SKILL, control, parse_command, system
+from cacheclm.arms import ARMS, SKILL, control, parse_reply, system
 from cacheclm.budget import BudgetExceeded
 from cacheclm.files import read_jsonl
 from cacheclm.mab import Sample
@@ -43,17 +43,38 @@ def events(tmp_path, arm, name):
     return [r for r in read_jsonl(run_log(tmp_path, arm, sample(), 0)) if r.get("event") == name]
 
 
-def test_parse_command_and_control_note():
-    assert parse_command("READY") is None
-    assert parse_command("```bash\ncat ctx.txt\n```") == "cat ctx.txt"
-    assert parse_command("```text\nnote\n```\n```bash\ncat new.txt\n```") == "cat new.txt"
+def test_parse_reply_and_control_note():
+    assert parse_reply("READY") == (None, {})
+    assert parse_reply("```bash\ncat ctx.txt\n```") == ("cat ctx.txt", {})
+    assert parse_reply("```text\nnote\n```\n```bash\ncat new.txt\n```") == ("cat new.txt", {"new.txt": "note\n"})
     assert "OVER LIMIT" in control("x" * 760, 200, 40, [0.25], "")
 
 
 def test_a_command_that_only_says_ready_is_ready():
     for reply in ('```bash\necho "READY"\n```', "```bash\necho READY\n```", "```sh\nprintf 'READY'\n```"):
-        assert parse_command(reply) is None  # Qwen often wraps READY in a command; it must not use up an edit
-    assert parse_command('```bash\necho "READY" >> ctx.txt\n```') == 'echo "READY" >> ctx.txt'  # a real edit stays
+        assert parse_reply(reply)[0] is None  # Qwen often wraps READY in a command; it must not use up an edit
+    assert parse_reply('```bash\necho "READY" >> ctx.txt\n```')[0] == 'echo "READY" >> ctx.txt'  # a real edit stays
+
+
+def test_a_python_block_runs_as_a_script_and_prose_between_blocks_is_never_a_command():
+    code = "open('ctx.txt', 'w').write('x')\n"
+    assert parse_reply(f"THOUGHT\n```python\n{code}```") == ("python3 edit.py", {"edit.py": code})
+    assert parse_reply("```python\nprint(1)\n```\nThen:\n```bash\nsed -n 1p ctx.txt\n```")[0] == "python3 edit.py"
+    assert parse_reply("```json\n{}\n```\nnot a command\n")[0] is None  # an unknown block runs nothing
+
+
+def test_an_edit_that_changes_nothing_is_told_so_and_never_repeats_the_same_prompt(tmp_path):
+    prompts = []
+    writes_new_txt = "```python\nopen('new.txt', 'w').write('kept facts')\n```"  # Qwen's mistake: ctx.txt untouched
+
+    class Spy(FakeLLM):
+        def chat(self, messages, max_tokens, repeat):
+            prompts.append(messages[-1]["content"])
+            return super().chat(messages, max_tokens, repeat)
+    run_sample(sample(), "clm", 0, Spy(lambda t: answers(t) or writes_new_txt), CFG, PRICE, tmp_path)
+    edit_prompts = [p for p in prompts if "Question:" not in p]
+    assert any("ctx.txt did not change" in p for p in edit_prompts)
+    assert len(set(edit_prompts)) == len(edit_prompts)  # a repeated prompt would replay the same reply from the cache
 
 
 def test_summary_arm_compacts_and_scores(tmp_path):
@@ -290,7 +311,9 @@ def test_gate_explains_itself_only_on_rejection(tmp_path):
 
 
 def test_skill_arm_is_clm_plus_the_skill_and_is_not_gated(tmp_path):
-    assert system("skill", 100, 0) == system("clm", 100, 0) + SKILL
+    assert system("skill", 100, 0) == system("clm", 100, 0) + SKILL["head"] + SKILL["eventqa"] + SKILL["factconsolidation"]
+    facts = system("skill", 100, 0, 16384, "factconsolidation")
+    assert "Numbered fact lists" in facts and "Book excerpts" not in facts  # the skill arm saw the book recipe on facts
     assert ARMS == ("summary", "clm", "gate", "skill")
     llm = FakeLLM(lambda t: answers(t) or (DROP_FIRST if t.count("role=chunk") >= 2 else "READY"))
     run_sample(sample(), "skill", 0, llm, CFG, PRICE, tmp_path)
