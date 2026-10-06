@@ -1,93 +1,224 @@
-# CacheCLM
+# Context editing under prompt-cache billing
 
-**Question:** when an agent edits its own context (a Context Language Model, or CLM), does it still save money on a hosted API that bills by prompt cache?
+Does an AI model that edits its own context still save money on a hosted API that bills through a prompt cache?
 
-## Why it matters
+This repo tests **Context Language Models (CLMs)** from [Shao et al., Sep 2026](https://arxiv.org/abs/2609.37725) in a setting the paper does not study. A CLM keeps its working context as a file that it edits with shell commands. The paper reports higher accuracy than harness-scheduled summaries, and fewer FLOPs, on a self-hosted server that can reuse cached work after an edit. A hosted API cannot do that, so this repo measures the trade-off in **billed dollars** on DeepSeek Flash. It also tests a **cache-aware gate** that refuses edits whose rebilled cache costs more than they save. The code package and CLI are called `cacheclm`.
 
-[Context Language Models](https://arxiv.org/abs/2609.37725) (Shao et al., Sep 2026) give the model its context as a file it edits with bash. The paper reports higher accuracy than harness-scheduled summarization, with fewer FLOPs, on a self-hosted server. On that server, a mid-context edit can reuse cached work (the paper's Suffix Cache Reuse).
+**Headline (pilot).** On two MemoryAgentBench tasks, each about 4× the context budget, with DeepSeek Flash:
+- **Book (EventQA):** letting the model edit its context matched the summary baseline's accuracy (0.91) but billed **2.5×** as much. The cache-aware gate kept the same accuracy at **1.4×**.
+- **Fact list (FactConsolidation):** the editing arms would not delete facts to make room, so they stopped reading a third of the way in. The summary and gate arms read everything but lost most facts. No arm came close to the whole-text ceiling.
+- **Scale:** this is a pilot, with one sample per task and 33 or 50 questions. All DeepSeek runs here, including smoke tests, cost **$3.13**.
 
-Hosted APIs are different. Their prompt cache reuses only the start of a request that matches the previous one. An edit in the middle therefore turns every later token into a cache miss, and DeepSeek bills a miss at 50x a hit. This project measures that trade-off in billed dollars.
+## How it works
 
-## The arms
+The pictures below are drawn from the code; each label names the file or function it shows. More pictures and a source table for every label are in [`docs/codebase-visual-atlas/`](docs/codebase-visual-atlas/index.html).
 
-All primary arms use the same model (DeepSeek Flash, thinking off), the same text chunks, questions and pinned task block, and a 32K-token context budget. The task block is sent first in every request but is never part of the editable file `ctx.txt`.
+### 1. Why an edit costs money on a hosted API
 
-1. **Summary.** When the context passes 75% of the budget, one call compacts everything except the last 2 chunks into a summary of at most about 1,500 words.
-2. **CLM.** The model edits `ctx.txt` with shell commands between chunks. Its prompt carries the paper's guidance in our own words: think first, prefer one large edit, be generous, locate text with code instead of retyping it, and remember that an edit makes everything after it be re-read. An edit that would grow the context past the budget is rolled back, as in the paper's default rule.
-3. **CLM + gate.** The same, but each edit must pass the cache-aware gate below. The model sees the gate's reasoning only when it rejects an edit.
-4. **Skill (exploratory).** CLM plus a short skill:
-   - **Books:** replace each new part with an event log.
-   - **Fact lists:** delete facts that a newer fact overrides, then the oldest.
+![Two trains pass a toll. Top: an append; old wagons ride at the cheap cached price and only the new wagon pays full price. Bottom: Xiaohei swaps a wagon in the middle, and every wagon after it pays full price](docs/codebase-visual-atlas/images/00-why-edits-cost.png)
 
-   Its guidance is mostly editing at the end of the file.
+A hosted prompt cache reuses only the **start** of a request that matches the previous request:
+- **Append:** adding text at the end leaves everything before it cached. Only the new part is billed at the full ("miss") price.
+- **Edit in the middle:** every token after the first change becomes a cache miss on the next call.
+- **The price gap:** DeepSeek bills a miss at **50×** a hit ($0.30 vs $0.006 per million tokens). An edit that deletes a little near the start can therefore cost far more than it saves.
 
-**Two reference arms** bracket the results and are not primary endpoints:
-- **none:** the questions with no context, the world-knowledge floor;
-- **full:** the whole text in one prompt, the ceiling.
+The provider's cache is drawn as it bills. The code does not implement that cache: it only logs the billed hits, alongside the hits a perfect prefix cache would give ("ideal").
 
-**Overflow.**
-- **Edit arms (CacheCLM's own policy, not the paper's behaviour):** an edit arm gets up to 6 attempts to make room for the next part. If it still cannot, it stops reading and answers the questions with the context it has. The log records where it stopped and how many parts it never read.
-- **Summary arm:** if a summary still leaves no room, the harness cuts the oldest whole lines of `ctx.txt` (forced truncation).
+### 2. One sample, one arm
 
-**Questions.** Every arm answers under the same query prompt, so neither the editing protocol nor the skill's recipe can affect the answers.
+![Pages cut from a book drop one at a time into a fixed-size crate; Xiaohei trims inside with scissors between pages; a STOP sign blocks a part that would not fit; a red blade cuts the oldest lines for the summary arm only; the lidded crate faces question cards under one prompt; a meter's tape runs to the report](docs/codebase-visual-atlas/images/01-reading-room.png)
 
-## The gate
+Every arm reads the same text, one part at a time, into a box of fixed size (the context budget):
+- **Between parts**, the arm's policy shrinks the box: the model edits it, or the harness summarizes it.
+- **Overflow, editing arms (CacheCLM's own policy, not the paper's):** an editing arm gets up to 6 tries to make room for the next part. If it still cannot, it stops reading and answers with what it has. The log records where it stopped and how many parts it never read.
+- **Overflow, summary arm:** the harness cuts the oldest lines.
+- **Questions:** after the last part, the box is frozen and every question is asked against it, under **one question prompt for every arm**.
+- **Logging:** every call is logged with its billed and ideal cache hits.
 
-An edit is allowed only if what it saves on later calls outweighs what it costs once. That cost is every token after the edit's first change (the unchanged tail plus any text the edit inserts), which the provider bills as a cache miss on the next call:
+### 3. Four arms, two references
+
+![Four crates in a row: a press over a crate holding a summary brick; Xiaohei cutting pages freely; Xiaohei offering a slip to a scale at the crate's mouth, with a rejected slip crossed out; Xiaohei reading a recipe card and writing a numbered event log. Below: an empty crate and an overflowing crate](docs/codebase-visual-atlas/images/04-four-arms.png)
+
+| Arm | Who shrinks the context | What can stop an edit |
+|---|---|---|
+| **summary** | The harness: at 75% of the budget, older parts become one summary; the latest part(s) stay verbatim | — |
+| **clm** | The model, with shell or Python edits | Empty file, or growth past the budget (rolled back) |
+| **gate** | The model | The same, plus the cache-aware gate below |
+| **skill** (exploratory) | The model, plus a short recipe: books → an event log of each new part; facts → delete overridden facts, then the oldest | Empty file, or growth past the budget |
+| none (reference) | No context at all: the world-knowledge floor | — |
+| full (reference) | The whole text, no budget: the ceiling | — |
+
+The editing prompt carries the paper's main advice in our own words:
+- think first;
+- prefer one large edit;
+- locate text with code and **never retype text you keep**;
+- an edit makes everything after it be re-read.
+
+### 4. The cache-aware gate
+
+![A long paper strip, blue and stamped "cached" on the left, red after an orange mark Xiaohei draws; deleted scraps fall into a bin; below, a scale weighs a few blue coins (saving) against more red coins (cost); a price tag, a free append, and an overflow lever](docs/codebase-visual-atlas/images/03-the-scale.png)
+
+An edit passes only if what it saves on later calls outweighs what it costs once:
 
 ```text
 deleted_tokens × turns_left × hit_price   >=   tokens_after_the_first_change × (miss_price − hit_price)
 ```
 
-A pure append (adding notes at the end) touches no cached token and is always allowed.
-
-If the next chunk would not fit otherwise, any edit that shrinks the context is allowed.
-
-Example: DeepSeek prices (hit $0.006/M, miss $0.30/M), a 30K context, 10 turns left:
+- **Pure append:** costs nothing.
+- **Over the limit:** while the next part would not fit, any edit that shrinks the context passes.
+- **Example:** DeepSeek prices, a 30K context, 10 turns left.
 
 | Edit | Deleted | Re-billed after it | Cost | Saving | Decision |
 |---|---|---|---|---|---|
 | A search result in the middle | 6K | 16K | $0.0047 | $0.00036 | reject |
 | The newest tool output | 6K | 0.5K | $0.00015 | $0.00036 | allow |
 
+### 5. How one edit runs
+
+![Xiaohei writes a slip with a text block and a bash command and posts it into a sealed glass booth, where a mechanical arm edits the ctx.txt scroll; the result is checked for an emptied or overgrown file, weighed on the scale, and a blue string carries the result back to the note on Xiaohei's wall](docs/codebase-visual-atlas/images/02-glass-booth.png)
+
+The model never touches its context directly:
+- **The note:** the model reads a note showing budget use, a nudge when a threshold is crossed, and an over-limit warning on every call while over.
+- **The command:** it replies with one command, which runs on `ctx.txt` inside a macOS `sandbox-exec` jail. The jail has no network, an allow-list of programs and a 10-second limit.
+- **Checks:** the result is rolled back if it empties the file or grows it past the budget; then the gate decides.
+- **Feedback:** the outcome goes into the next note.
+
+## Result 1: harder DeepSeek run (the headline)
+
+**Setup:**
+- **Model:** DeepSeek Flash with thinking off.
+- **Data:** two MemoryAgentBench samples, each about **4× its context budget**. Neither is in the planned full-run set.
+  - **EventQA:** a 41K-token stretch of a novel, in 25 parts, with a 10K budget. The 33 questions are the ones whose events fall inside that stretch. Each asks which of 6 events happens next.
+  - **Fact list:** FactConsolidation single-hop, 34K tokens, in 18 parts, with an 8K budget and 50 questions. Newer facts override older ones.
+- **Repeats:** one run per arm. Config: `configs/deepseek_hard.yaml`.
+
+![Accuracy against billed cost per arm, one panel per task, with dashed lines for the no-context floor and the whole-text ceiling; hollow points mark arms that stopped reading on overflow](docs/results/ds_hard/accuracy_vs_cost_by_task.png)
+
+**EventQA:**
+
+| Arm | Accuracy | Billed $ | Cost vs summary | Notes |
+|---|---|---|---|---|
+| none | 0.73 | 0.004 | — | the questions list the earlier events, so guessing is easy |
+| **summary** | 0.91 | 0.071 | 1.0× | |
+| **clm** | 0.91 | 0.176 | 2.5× | 47 edits that changed the context |
+| **gate** | 0.91 | 0.098 | **1.4×** | 22 edits rejected on price |
+| skill | 0.94 | 0.245 | 3.4× | stopped reading with 7 of 25 parts unread |
+| full | 1.00 | 0.024 | — | |
+
+**Fact list:**
+
+| Arm | Accuracy | Billed $ | Cost vs summary | Notes |
+|---|---|---|---|---|
+| none | 0.28 | 0.003 | — | |
+| **summary** | 0.36 | 0.062 | 1.0× | read everything; answered only 1 of the 9 questions whose fact is in the first 6 parts |
+| **clm** | 0.46 | 0.050 | 0.8× | **stopped reading at part 6 of 18** |
+| **gate** | 0.22 | 0.106 | 1.7× | read everything; 11 edits rejected on price; 39 answers wrong because the fact was missing |
+| skill | 0.46 | 0.042 | 0.7× | **stopped reading at part 6 of 18** |
+| full | 0.56 | 0.024 | — | |
+
+How to read these numbers:
+- **On the book, editing did not buy accuracy.** clm, gate and summary all scored 0.91. clm billed 2.5× summary, because each mid-context edit turns everything after it into cache misses. The gate refused 22 of those edits and cut the bill to 1.4× at the same accuracy. This is the trade-off it was built for.
+- **On the fact list, the 0.46 of clm and skill is not a win.**
+  - They never made room for part 7. In all 6 tries they answered READY while over the limit, so they stopped reading with 12 of 18 parts unread.
+  - Their score comes from keeping the first 6 parts verbatim, which answers 7 of the 9 questions whose fact is there, plus guessing on the 41 questions about facts they never read (16 right, close to the no-context rate).
+  - They look cheap only because they stopped early. They gave identical answers because they kept the same text and every arm answers under the same question prompt.
+- **The gate backfired on facts.** It refused 11 edits that would have rebilled the cache. The edits it later had to accept, once over the limit, likely deleted more: 39 answers were wrong because the fact was missing, the most of any arm. It ended at 0.22 for 1.7× the cost.
+- **Caveat.** These are single runs of one sample per task, with 33 or 50 questions. One EventQA question is worth 0.03, so the 0.91–0.94 differences are noise. The cost ratios are more stable than the accuracy differences, because every call is billed.
+
+**Cost:** $0.89. Full tables, including every edit attempt's outcome: [`docs/results/ds_hard/summary.md`](docs/results/ds_hard/summary.md).
+
+## Result 2: smaller DeepSeek run (EventQA saturated)
+
+**Setup:** the same arms on smaller texts, about 1.6× the budget: a 16K-token book stretch with 15 questions, and the 6.5K-token fact list with a 4K budget, asked as single-hop and as multi-hop questions. Config: `configs/deepseek_small.yaml`.
+
+| Arm | Facts, single-hop | Facts, multi-hop | EventQA | Billed cost vs summary |
+|---|---|---|---|---|
+| none | 0.20 | 0.04 | 0.73 | — |
+| summary | 0.50 | 0.24 | 1.00 | 1.0× |
+| clm | 0.48 | 0.16 | 1.00 | 1.4× |
+| gate | 0.54 | 0.08 | 1.00 | 1.2× |
+| skill | **0.64** | **0.28** | 1.00 | 3.1× |
+| full | 0.54 | 0.04 | 1.00 | — |
+
+- **EventQA was too easy:** every arm scored 1.00, which is why Result 1 uses a longer text.
+- **Facts:** the skill arm's "delete overridden facts" recipe beat even the whole text (0.64 vs 0.54). With every fact in view, DeepSeek resolves some conflicts wrongly.
+- **Multi-hop facts:** every arm is near the floor.
+
+**Cost:** $0.30. Tables: [`docs/results/ds_small/summary.md`](docs/results/ds_small/summary.md).
+
+## Appendix: free local check with Qwen3.5 9B
+
+Before spending, the same three small tasks ran on a laptop: Qwen3.5 9B on Ollama, an M3 Pro with 18 GB of RAM, `configs/local.yaml`. It is a weak context editor, so these numbers check the harness and are not results:
+- **Destructive edits:** its Python edits deleted most facts. It ended with 1,000–1,700 of 4,000 tokens used, and its fact accuracy fell from summary's 0.50 to 0.12–0.36.
+- **Runaway replies:** 2–3 replies per arm ran to the 10,000-token cap, in repetition loops or by copying the book word for word.
+- **Weak ceiling:** even with the whole text it scored only 0.46 on single-hop facts.
+
+The run found five harness bugs, all fixed since and covered by tests (see below). Tables: [`docs/results/local/summary.md`](docs/results/local/summary.md).
+
+## What we learned
+
+### About context editing under cache billing
+
+- **Rewriting the whole context is the expensive habit.** In an early DeepSeek smoke run, 11 of 17 applied edits rewrote the whole context, and about 30% of edit replies ran into the reply cap. The paper's own prompt says to locate text with code and never retype it. With that rule added, clm billed 1.0–1.9× summary in the small run and 2.5× in the harder one. We have no clean before-and-after comparison on DeepSeek.
+- **A price-aware gate helps when edits are optional.** It halved clm's extra cost on the book. On a fact list under pressure, refusing early edits only moved the deletion later and made it worse.
+- **Under heavy pressure, the model may stop instead of deleting.** DeepSeek preferred to answer READY while over the limit rather than drop facts. A harness that silently cuts the oldest lines would hide this. We first did that, and Qwen's scores looked good until we found the cut was doing the work, because "keep the newest" suits a fact list where newer facts win.
+- **Summaries of lists become inventories.** The summary arm hit its length cap on most fact summaries, even after the prompt stated the cap. Cut-off summaries lose their newest lines, which are the ones that matter for fact lists.
+
+### About the harness (bugs found by running it, all fixed)
+
+| Problem | Symptom | Fix |
+|---|---|---|
+| Text-block parsing | The closing fence of a text block was read as an empty command | Fenced blocks are parsed one at a time |
+| "Nothing to do" wrappers | Qwen wrapped READY as `echo "READY"`; DeepSeek used `true`; each one used up an edit slot | Both count as READY |
+| Python blocks ignored | A 7,971-token reply in a ```` ```python ```` block was read as READY and thrown away | Python blocks run as `python3 edit.py` |
+| Results written to `new.txt` | `ctx.txt` was unchanged; the reply cache then replayed the same failed command up to 6 times | The note now says "ctx.txt did not change" and shows the edits left, so no two prompts repeat |
+| Arm-specific question prompts | The skill's recipe and the editing protocol reached the answers (found in review) | One question prompt for every arm |
+| Silent forced truncation | It hid edit failures and favoured fact lists | Stop-on-overflow for the editing arms; the cut is kept for the summary arm only |
+| Nudges did not fire again | After a compaction, a threshold crossed again stayed silent | The nudge is measured from the size after the previous phase's edits |
+| Stream identity by cost | Two samples were treated as one stream whenever their costs matched | A stream fingerprint in each run log |
+
+## Differences from the paper
+
+This is an extension, not a replication. The full comparison, a reviewer's findings and our responses are in [`docs/audit/2026-10-06-arms-vs-paper.md`](docs/audit/2026-10-06-arms-vs-paper.md). The main differences:
+- **Benchmark:** the paper's gains come from agentic tasks, where CLM deletes stale tool output. Our memory streams are mostly signal, so smaller gains are expected.
+- **Our addition:** the paper measures prefix-reuse FLOPs and reports some API costs. It does not decide or evaluate edits by a provider's billed hit, miss and output prices. The gate and the cache-billing comparison are ours.
+- **Overflow:** stop-on-overflow is our own policy, though it echoes the paper's rule for its terminal benchmarks ("a request that would exceed [the budget] ends the run").
+- **Simplifications:**
+  - our editing turns are not kept in the context;
+  - we parse fenced blocks instead of using native tool calls;
+  - we count tokens as characters ÷ 4.
+- **Baseline:** our summary keeps the latest part(s) verbatim, which likely makes it a stronger baseline than the paper's.
+
 ## Data
 
-**Source:** [MemoryAgentBench](https://huggingface.co/datasets/ai-hyz/MemoryAgentBench) (MIT), pinned to commit `7ea0669`. Only two parquet files are used. `scripts/get_data.py` downloads them over plain HTTPS and checks their SHA-256.
+- **Source:** [MemoryAgentBench](https://huggingface.co/datasets/ai-hyz/MemoryAgentBench) (MIT), pinned to commit `7ea0669`. `scripts/get_data.py` downloads its two parquet files over plain HTTPS and checks their SHA-256.
+- **Prompts and scoring** are adapted from the benchmark's `utils/templates.py` and `substring_exact_match`.
+- **The runs above** use rows that the planned full run does not evaluate.
+- **The planned full run** (`configs/base.yaml`) uses the five ~70K-token EventQA books and the 64K FactConsolidation sets, with a 32K budget. It is estimated at $6–8 and has not been run.
 
-**Samples:** 7, streamed in 4K-token chunks, 2-2.2x the context budget:
-- the 5 EventQA books at about 70K tokens (`eventqa_65536`);
-- FactConsolidation single-hop and multi-hop at about 68K tokens (`*_64k`).
+## Run
 
-The first smoke run projected about $9 for the ~140K-token EventQA versions, so the plan fell back to the ~70K versions.
-
-**Units.** FactConsolidation rows 6 and 2 share one text and differ only in their questions. They count as one unit with 200 questions, and that unit gets a second repeat to measure run-to-run noise. Each EventQA book is its own unit. Results are reported overall and per task family.
-
-**Prompts and scoring** are adapted from the benchmark's `utils/templates.py` and `utils/eval_other_utils.py` (`substring_exact_match`).
-
-## Run it
-
-Needs macOS (edits run under `sandbox-exec`), Python 3.13, [uv](https://docs.astral.sh/uv/), and `DEEPSEEK_API_KEY` in a `.env` file.
+Needs macOS (edits run under `sandbox-exec`), Python 3.13 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
 uv run python scripts/get_data.py
-uv run cacheclm smoke                # data not evaluated, 4 arms: about $0.4 (see below)
-uv run cacheclm report --smoke
-uv run cacheclm run                  # 7 samples x 4 arms, the 2 reference arms, and the extra FactConsolidation repeat
-uv run cacheclm report               # results/summary.md, summary.html, accuracy_vs_cost.png
+uv run pytest                                              # 105 tests
+uv run cacheclm smoke --config configs/deepseek_hard.yaml  # Result 1, about $0.9
+uv run cacheclm report --smoke --config configs/deepseek_hard.yaml
+uv run cacheclm smoke --config configs/deepseek_small.yaml # Result 2, about $0.3
+uv run cacheclm smoke --config configs/local.yaml          # free, on Ollama with qwen3.5-9b-32k
+uv run cacheclm run                                        # the planned full run (not yet run)
 ```
 
-**Smoke samples** use only data that is not evaluated:
-- **FactConsolidation mh_32k (row 1):** a 16K budget so editing is needed, and all 100 questions.
-- **EventQA:** the `eventqa_full` text beyond what the evaluated rows cover, with 5 questions. This checks behaviour only; its accuracy is not interpreted.
-
-**Cost:**
-- **Cap:** every real API call counts against a $5 cap stored in `cache/spend.json`. The full run is estimated at about $3.4-3.9, plus about $0.4 for the smoke runs.
-- **Replays:** cached calls replay for free.
-- **Resuming:** an interrupted run skips the (sample, arm, repeat) runs that already finished.
+- **API key:** `DEEPSEEK_API_KEY` goes in `.env`. Local runs need no key.
+- **Spend cap:** every real API call counts against a cap stored in `cache/spend.json`.
+- **Free replays and resuming:** cached calls replay for free, and an interrupted run skips the (sample, arm, repeat) runs that already finished.
+- **Reports:** each run writes `summary.md`, `summary.html` and a chart to its results folder. The results above are copied to `docs/results/`.
 
 ## Credits
 
 - **Method and context-file format:** Context Language Models (arXiv 2609.37725, CC BY 4.0). Its repository (`facebookresearch/context-language-models`) is CC BY-NC 4.0. No code or prompt text is copied; some prompt ideas (locate text with code, do not wipe whole regions, the fit rule for growing edits) are paraphrased from it with this attribution.
 - **Data and scoring:** MemoryAgentBench (arXiv 2507.05257), MIT.
+- **Illustrations:** hand-drawn SVG (rough.js) rendered with headless Chrome; sources in `docs/codebase-visual-atlas/src/`.
 - **Code:** MIT.

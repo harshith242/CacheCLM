@@ -1,6 +1,6 @@
 # CacheCLM visual atlas: evidence ledger
 
-Every element drawn in the atlas maps to a row here. Line numbers are from commit `831f3f1`. All rows were traced in the
+Every element drawn in the atlas maps to a row here. Line numbers are from commit `831f3f1`, except rows L27–L31, which are from `8bbb760`. All rows were traced in the
 source. One row (L26) is marked `inferred`: it describes the provider's behaviour, not code in this repo.
 
 | ID | Visual element | File:symbol (lines) | What the code does | observed / inferred |
@@ -31,6 +31,11 @@ source. One row (L26) is marked `inferred`: it describes the provider's behaviou
 | L24 | Report | `src/cacheclm/report.py: run_row, merge, write_report` (52–88, 169–208) | Billed cost plus the ideal-cache cost repriced under 3 price sheets. Accuracy, paired bootstrap, and the fact error split (retention vs resolution). | observed |
 | L25 | Price tags | `configs/prices.yaml` | DeepSeek: hit $0.006/M, miss $0.30/M, output $1.20/M. OpenAI and Anthropic are used for repricing. | observed |
 | L26 | Provider prefix cache | (provider side) | The provider bills an unchanged prompt prefix at the hit price. The gate and `Recorder` model this; the repo does not implement it. | inferred |
+| L27 | Stop sign | `src/cacheclm/run.py: stream` (93–98) | An edit arm that cannot make room for the next part stops reading; logs `overflow_stop` with the unread part count (CacheCLM policy, not the paper's) | observed |
+| L28 | One question prompt | `src/cacheclm/run.py: answer_all` (63) | Every arm answers under the same system prompt (`Run r{repeat}.` + `BASE`) | observed |
+| L29 | Growth check | `src/cacheclm/arms.py: edit_phase` (127–133) | An edit that grows the context past the budget is rolled back, for every edit arm | observed |
+| L30 | Reply parser | `src/cacheclm/arms.py: parse_reply` (56–67) | First bash block, or a python block run as `edit.py`; text blocks become `new.txt`; `echo READY` and `true` mean READY | observed |
+| L31 | Toll and trains | `src/cacheclm/run.py: Recorder.chat` (37–55); `configs/prices.yaml` | Logs billed hits and ideal hits (the prefix shared with the previous request); prices hit $0.006/M, miss $0.30/M | observed (the cache itself is L26, inferred) |
 
 ## Shot list
 
@@ -40,3 +45,5 @@ source. One row (L26) is marked `inferred`: it describes the provider's behaviou
 | 02 | The CLM edit loop | L11, L14, L15, L16, L17, L18, L13, L12 | Glass booth. Xiaohei writes a slip (text block plus bash command) and posts it into a sealed glass booth, where an arm edits the `ctx.txt` scroll. The receipt is strung back to Xiaohei's wall note. An over-long slip gets cut off. | The model never touches the context directly. It posts one command into a jail, the result is checked (emptied? gate?) and fed back in the next note. |
 | 03 | The cache-aware gate | L18, L25, L26, L19 | Long paper strip. The left part is stamped cached; Xiaohei marks the first change and everything after it turns red. A balance scale weighs coins: saving per turn on one pan, the one-time rebill on the other. | An edit pays only if what it frees, times the turns left, outweighs re-billing everything after its first change. Appends are free. Over the limit, any shrink passes. |
 | 04 | Four arms, two references | L20, L12, L19, L22, L23 | A 4-scene comic, one crate each. Summary: a press, with Xiaohei carving the brick. clm: free scissors. gate: the scale at the crate's mouth. skill: a recipe card. Footer: an empty crate and an overflowing crate. | The arms differ only in who edits the box and what may stop them. The references bracket the result. |
+
+| 00 | Why an edit costs money on a hosted API | L31, L26, L18 | Two trains pass a toll. An appended wagon is the only one to pay full price; when Xiaohei swaps a wagon in the middle, every wagon after it pays full price. | An edit in the middle turns every later token into a cache miss at 50× the hit price; an append does not. |

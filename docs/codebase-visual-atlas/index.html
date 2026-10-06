@@ -19,9 +19,17 @@
 </style></head>
 <body><main>
 <h1>CacheCLM, drawn</h1>
-<p class="lede">Four hand-drawn pictures of how this repo works, in learning order, each grounded in the source (commit
+<p class="lede">Five hand-drawn pictures of how this repo works, in learning order, each grounded in the source (commit
 <code>831f3f1</code>; full evidence in <a href="ledger.md">ledger.md</a>). The question the repo tests: when a model edits its
 own context (Context Language Models), does it save billed dollars under hosted prompt caching, and does a cache-aware gate help?</p>
+
+<h2>0. Why an edit costs money on a hosted API</h2>
+<img src="images/00-why-edits-cost.png" alt="Two trains pass a toll. Top: an append; only the new wagon pays full price. Bottom: Xiaohei swaps a wagon in the middle, and every wagon after it pays full price.">
+<p class="takeaway">A hosted prompt cache reuses only the start of a request that matches the previous one. An append leaves everything before it cached. An edit in the middle turns every later token into a cache miss, which DeepSeek bills at 50× a hit. The repo does not implement the provider's cache. It logs the billed hits next to the hits a perfect prefix cache would give.</p>
+<table><tr><th>Drawn as</th><th>Source</th><th>What the code does</th></tr>
+<tr><td>Toll, coin sizes</td><td><a href="../../configs/prices.yaml">configs/prices.yaml</a></td><td>DeepSeek: hit $0.006/M, miss $0.30/M, output $1.20/M.</td></tr>
+<tr><td>Blue wagons (cached prefix)</td><td>(provider side, <em>inferred</em>)</td><td>The provider bills an unchanged prefix at the hit price.</td></tr>
+<tr><td>Recorder</td><td><a href="../../src/cacheclm/run.py">run.py: Recorder.chat</a> (37–55)</td><td>Logs billed cache hits and ideal hits for every call.</td></tr></table>
 
 <h2>1. One sample through one arm</h2>
 <img src="images/01-reading-room.png" alt="Pages cut from a book drop one at a time into a fixed-size crate; Xiaohei trims inside with scissors; the lidded crate then faces question cards while a meter's tape runs to a report ledger.">
@@ -31,8 +39,9 @@ own context (Context Language Models), does it save billed dollars under hosted 
 <tr><td>Pages in flight</td><td><a href="../../src/cacheclm/run.py">run.py: stream</a> (74–92)</td><td>For each part (plus one last pass): policy, then <code>fit</code>, then append the part.</td></tr>
 <tr><td>Crate, pinned card</td><td><a href="../../src/cacheclm/ctxfile.py">ctxfile.py: new_context, append</a> (18–38)</td><td>The task block is sent first but never written to <code>ctx.txt</code>; parts are appended as <code>[[CTX_TURN i role=chunk]]</code> blocks.</td></tr>
 <tr><td>Xiaohei with scissors</td><td><a href="../../src/cacheclm/arms.py">arms.py: edit_phase, summary_step</a> (74–128)</td><td>The arm's policy: model edits (clm, gate, skill) or harness summary (summary).</td></tr>
-<tr><td>Red blade</td><td>arms.py: fit (131–139)</td><td>Forced truncation of the oldest whole lines when the next part will not fit.</td></tr>
-<tr><td>Lidded crate, question cards</td><td>run.py: answer_all (55–71)</td><td>Each question in its own call on the frozen context; serial until a cache hit, then parallel.</td></tr>
+<tr><td>Red blade</td><td>run.py: stream (90); arms.py: fit</td><td>Summary arm only: forced truncation of the oldest whole lines when the next part will not fit.</td></tr>
+<tr><td>Stop sign</td><td>run.py: stream (93–98)</td><td>CacheCLM policy, not the paper's: an edit arm that cannot make room stops reading and logs <code>overflow_stop</code>.</td></tr>
+<tr><td>Lidded crate, question cards</td><td>run.py: answer_all (58–77)</td><td>Each question in its own call on the frozen context, under one question prompt for every arm (line 63).</td></tr>
 <tr><td>Meter and tape</td><td>run.py: Recorder.chat (37–52)</td><td>Logs billed cache hits and ideal hits (prefix shared with the previous request) for every call.</td></tr>
 <tr><td>Ledger book</td><td><a href="../../src/cacheclm/report.py">report.py: write_report</a> (169–208)</td><td>Accuracy, billed cost, ideal-cache cost repriced under three price sheets.</td></tr></table>
 
@@ -41,10 +50,10 @@ own context (Context Language Models), does it save billed dollars under hosted 
 <p class="takeaway">The model never touches its context directly. It reads a note (budget use, a nudge the first time a threshold is crossed, an over-limit warning on every call), posts one command into a jail, and the result is checked (emptied? does the gate allow it?) before being fed back in the next note. A reply cut off by the length cap ends the phase without a retry.</p>
 <table><tr><th>Drawn as</th><th>Source</th><th>What the code does</th></tr>
 <tr><td>Wall note</td><td>arms.py: control (58–71); edit_phase (79)</td><td>Budget line; OVER LIMIT every call while the next part won't fit; nudge only for thresholds crossed since the previous phase started.</td></tr>
-<tr><td>Slip (text + bash)</td><td>arms.py: parse_command (51–55), edit_phase (96–97)</td><td><code>```text</code> blocks are stripped, then the <code>```bash</code> command is read; the text block becomes <code>new.txt</code>.</td></tr>
+<tr><td>Slip (text + bash)</td><td>arms.py: parse_reply (56–67)</td><td>The first bash block, or a python block run as <code>edit.py</code>; text blocks become <code>new.txt</code>; <code>echo READY</code> and <code>true</code> mean READY.</td></tr>
 <tr><td>Clipboard at the door</td><td><a href="../../src/cacheclm/sandbox.py">sandbox.py: check</a> (25–43)</td><td>Only sed, awk, grep, head, tail, cat, wc, echo, printf, mv, cp, python3; no heredocs, <code>$(</code> or backticks.</td></tr>
 <tr><td>Glass booth, padlock</td><td>sandbox.py: run (46–73)</td><td>Temp dir under <code>sandbox-exec</code>: no network, writes only inside, no home reads except Python; 10 s timeout with process-group kill; reads back only a regular file.</td></tr>
-<tr><td>Magnifier</td><td>arms.py: edit_phase (99–100)</td><td>An edit that leaves only header lines is rolled back.</td></tr>
+<tr><td>Magnifier</td><td>arms.py: edit_phase (126–133)</td><td>An edit that leaves only header lines, or grows the context past the budget, is rolled back.</td></tr>
 <tr><td>Scale</td><td><a href="../../src/cacheclm/gate.py">gate.py: decide</a> (13–27)</td><td>The cache-aware gate (image 3).</td></tr>
 <tr><td>Cut slip</td><td>arms.py: edit_phase (89–91)</td><td>No command and <code>finish_reason == "length"</code>: log <code>cut_off</code>, end the phase.</td></tr>
 <tr><td>Blue string</td><td>arms.py: edit_phase (110)</td><td>The command's output (plus the gate's reason when it rejects) goes into the next note.</td></tr></table>

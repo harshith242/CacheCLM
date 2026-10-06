@@ -5,11 +5,11 @@
 rect(60, 60, 430, 220, { fill: "#fff", fillStyle: "solid" });
 ell(275, 64, 14, 14, { fill: INK, fillStyle: "solid" });
 text(80, 108, "Context: 7,812 of 10,000 (78%)", { size: 26 });
-text(80, 148, "Your context is over 75% full.", { size: 26, color: ORANGE });
+text(80, 148, "Over 75% full: shorten, don't wipe.", { size: 26, color: ORANGE });
 ell(440, 140, 64, 36, { stroke: ORANGE, strokeWidth: 1.6 }); text(440, 148, "once", { size: 20, color: ORANGE, anchor: "middle" });
 text(80, 190, "OVER LIMIT: free 1,200 tokens", { size: 26, color: RED });
 text(80, 232, "Result of your last command: ...", { size: 26, color: BLUE });
-label(60, 330, "control", "arms.py", "nudge once · OVER LIMIT every call");
+label(60, 330, "control", "arms.py", "nudge per crossing · OVER LIMIT every call");
 
 // The desk, Xiaohei writing the slip.
 line(150, 720, 560, 720, { strokeWidth: 3 }); line(180, 720, 180, 840); line(530, 720, 530, 840);
@@ -18,7 +18,7 @@ line(420, 690, 445, 650, { strokeWidth: 3 });      // the pen
 poly([[430, 690], [770, 530], [800, 600], [465, 745]], { fill: "#fff", fillStyle: "solid" });  // the slip
 text(490, 694, "```text  notes...", { size: 22, color: BLUE, rotate: -25 });
 text(510, 724, "```bash  python3 -c ...", { size: 22, rotate: -25 });
-label(560, 800, "parse_command", "arms.py", "text block → new.txt, bash → command");
+label(560, 800, "parse_reply", "arms.py", "text → new.txt; bash or python → command");
 
 // An over-long slip curling to the floor, cut by red scissors.
 curve([[200, 722], [215, 820], [185, 900], [230, 990]], { strokeWidth: 2 });
@@ -54,7 +54,7 @@ curve([[1200, 590], [1250, 580], [1290, 600]], { stroke: ORANGE, strokeWidth: 3 
 arrowHead(1290, 600, 0.3);
 rect(1300, 560, 120, 80, { fill: "#fff", fillStyle: "solid" });
 ell(1400, 540, 60, 60, { stroke: RED }); line(1420, 562, 1445, 590, { stroke: RED, strokeWidth: 4 });
-label(1260, 720, "emptied?", "edit_phase", "headers only → roll back", { color: RED });
+label(1260, 720, "emptied? grew?", "edit_phase", "empty or past the limit → roll back", { color: RED });
 curve([[1440, 600], [1520, 590], [1580, 600]], { stroke: ORANGE, strokeWidth: 3 });
 arrowHead(1580, 600, 0.2);
 line(1680, 480, 1680, 640, { strokeWidth: 3 }); line(1600, 500, 1760, 500, { strokeWidth: 3 });

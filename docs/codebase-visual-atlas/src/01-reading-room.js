@@ -40,7 +40,7 @@ pointer(1240, 230, 1060, 255);
 line(640, 700, 760, 830, { stroke: RED, strokeWidth: 4 });
 poly([[600, 680], [650, 655], [700, 720], [655, 740]], { stroke: RED, fill: "#fff", fillStyle: "solid" });
 for (let i = 0; i < 3; i++) line(560 - i * 30, 860 + i * 22, 610 - i * 30, 870 + i * 22, { stroke: RED, strokeWidth: 1.6 });
-label(330, 930, "fit", "arms.py", "forced cut of the oldest lines", { color: RED });
+label(330, 930, "fit", "run.py → arms.py", "summary arm only: cut oldest lines", { color: RED });
 
 // After the last part: the crate is lidded and the questions arrive.
 curve([[1190, 640], [1250, 610], [1310, 640]], { stroke: ORANGE, strokeWidth: 3 });
@@ -51,7 +51,7 @@ for (const [x, y, t] of [[1620, 520, -6], [1700, 560, 5], [1780, 515, -3]]) {
   page(x, y, 70, 92, { tilt: t, lines: 0 });
   text(x + 35, y + 64, "?", { size: 54, anchor: "middle", color: ORANGE });
 }
-label(1600, 400, "answer_all", "run.py", "questions on the frozen box", { color: ORANGE });
+label(1600, 400, "answer_all", "run.py", "one question prompt for every arm", { color: ORANGE });
 
 // Each call is metered; the tape runs into the report ledger.
 ell(1445, 680, 64, 64);
@@ -62,5 +62,12 @@ for (let i = 0; i < 6; i++) line(1450 + i * 45, 820 + (i % 3) * 14, 1462 + i * 4
 label(1180, 850, "Recorder", "run.py", "logs every call: billed + ideal hits", { color: BLUE });
 rect(1720, 880, 150, 100, { fill: "#fff", fillStyle: "solid" });
 line(1795, 880, 1795, 980);
-label(1600, 1030, "write_report", null, null, { size: 32 });
-text(1785, 1030, "report.py", { size: 22, color: "#555", font: "Patrick Hand" });
+text(1795, 1010, "report.py", { size: 24, color: "#555", font: "Patrick Hand", anchor: "middle" });
+
+// Stop-on-overflow (CacheCLM policy): an edit arm that cannot make room stops reading; the next part never enters.
+poly([[742, 222], [778, 222], [804, 248], [804, 284], [778, 310], [742, 310], [716, 284], [716, 248]],
+     { stroke: RED, fill: "#fff", fillStyle: "solid", strokeWidth: 3 });
+text(760, 276, "STOP", { size: 28, color: RED, anchor: "middle", weight: 700 });
+line(760, 310, 760, 360, { stroke: RED, strokeWidth: 3 });
+label(560, 60, "overflow_stop", "run.py · CacheCLM policy", "edit arm can't make room: stops reading", { color: RED });
+pointer(700, 150, 745, 222, RED);
