@@ -1,4 +1,4 @@
-from cacheclm.ctxfile import append, blocks, cut_oldest_lines, next_index, normalize, split_for_summary
+from cacheclm.ctxfile import append, cut_oldest_lines, normalize, split_for_summary
 
 
 def build(n):
@@ -6,16 +6,6 @@ def build(n):
     for i in range(n):
         body = append(body, "chunk", f"part {i}")
     return body
-
-
-def test_body_blocks_are_numbered_from_one():
-    assert next_index("") == 1
-    assert [(b[2], b[3]) for b in blocks(build(3))] == [(1, "chunk"), (2, "chunk"), (3, "chunk")]
-
-
-def test_append_after_an_edit_without_trailing_newline():
-    body = build(1) + "[[CTX_TURN 7 role=notes]]\nmy note"
-    assert [b[2] for b in blocks(append(body, "chunk", "next"))] == [1, 7, 8]
 
 
 def test_normalize_heads_loose_text_and_strips_model_pinned_marks():

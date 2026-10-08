@@ -231,7 +231,7 @@ Needs macOS (edits run under `sandbox-exec`), Python 3.13 and [uv](https://docs.
 ```bash
 uv sync
 uv run python scripts/get_data.py
-uv run pytest                                              # 106 tests
+uv run pytest                                              # 71 tests
 uv run cacheclm smoke --config configs/deepseek_hard.yaml  # Result 1, about $0.9
 uv run cacheclm report --smoke --config configs/deepseek_hard.yaml
 uv run cacheclm smoke --config configs/deepseek_extra.yaml # second book, editing arms only, about $0.4

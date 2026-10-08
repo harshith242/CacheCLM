@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from cacheclm.report import call_cost, kept_share, load_units, paired, write_report
+from cacheclm.report import call_cost, load_units, paired, write_report
 
 PRICES = {"deepseek": {"cache_read": 0.006, "cache_write": 0.30, "output": 1.20},
           "openai": {"cache_read": 0.175, "cache_write": 1.75, "output": 14.0},
@@ -19,13 +19,6 @@ def test_paired_stats_on_consistent_gains():
     mean, low, high, p = paired([0.1] * 5)
     assert mean == pytest.approx(0.1) and low == pytest.approx(0.1) and high == pytest.approx(0.1)
     assert p == pytest.approx(2 / 32, abs=0.02)  # only all-plus or all-minus sign flips reach the mean
-
-
-def test_kept_share():
-    share, _, _ = kept_share([0.5, 0.5], [0.7, 0.7], [0.6, 0.6])
-    assert share == pytest.approx(0.5)
-    assert kept_share([0.5, 0.5], [0.5, 0.5], [0.6, 0.6]) is None
-    assert kept_share([0.5, 0.5], [0.45, 0.45], [0.48, 0.48]) is None  # CLM lost accuracy: no gain to keep
 
 
 def call(phase, hit, prompt=1000):

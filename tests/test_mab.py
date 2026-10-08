@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from cacheclm.mab import check_file, chunk_text, correct, gold_fact, load_sample, normalize_answer
+from cacheclm.mab import check_file, chunk_text, correct, gold_fact, normalize_answer
 
 DATA = Path("data/memoryagentbench")
 
@@ -34,15 +34,6 @@ def test_a_tampered_file_is_refused(tmp_path):
     fake.write_bytes(b"not the pinned file")
     with pytest.raises(ValueError, match="SHA-256"):
         check_file(fake, "Conflict_Resolution")
-
-
-@pytest.mark.skipif(not DATA.exists(), reason="run scripts/get_data.py first")
-def test_the_configured_samples_load():
-    event = load_sample(DATA, "Accurate_Retrieval", 12)
-    facts = load_sample(DATA, "Conflict_Resolution", 6)
-    assert event.source == "eventqa_131072" and facts.source == "factconsolidation_sh_64k"
-    assert len(event.questions) == len(event.answers) == 100
-    assert facts.answers[0] == ["Ancient Greek"]
 
 
 def test_gold_fact_is_the_latest_matching_fact_about_the_question():

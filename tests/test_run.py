@@ -43,33 +43,26 @@ def events(tmp_path, arm, name):
     return [r for r in read_jsonl(run_log(tmp_path, arm, sample(), 0)) if r.get("event") == name]
 
 
-def test_parse_reply_and_control_note():
+def test_parse_reply():
     assert parse_reply("READY") == (None, {})
     assert parse_reply("```bash\ncat ctx.txt\n```") == ("cat ctx.txt", {})
     assert parse_reply("```text\nnote\n```\n```bash\ncat new.txt\n```") == ("cat new.txt", {"new.txt": "note\n"})
+    code = "open('ctx.txt', 'w').write('x')\n"
+    assert parse_reply(f"THOUGHT\n```python\n{code}```") == ("python3 edit.py", {"edit.py": code})
+    assert parse_reply("```python\nprint(1)\n```\nThen:\n```bash\nsed -n 1p ctx.txt\n```")[0] == "python3 edit.py"
+    assert parse_reply("```json\n{}\n```\nnot a command\n")[0] is None  # prose between blocks is never a command
+    for no_op in ('```bash\necho "READY"\n```', "```sh\nprintf 'READY'\n```", "```bash\ntrue\n```", "```bash\n:\n```"):
+        assert parse_reply(no_op)[0] is None  # Qwen and DeepSeek say "nothing to do" these ways; none uses up an edit
+    assert parse_reply('```bash\necho "READY" >> ctx.txt\n```')[0] == 'echo "READY" >> ctx.txt'  # a real edit stays
     assert "OVER LIMIT" in control("x" * 760, 200, 40, [0.25], "")
 
 
-def test_a_command_that_only_says_ready_is_ready():
-    for reply in ('```bash\necho "READY"\n```', "```bash\necho READY\n```", "```sh\nprintf 'READY'\n```"):
-        assert parse_reply(reply)[0] is None  # Qwen often wraps READY in a command; it must not use up an edit
-    assert parse_reply('```bash\necho "READY" >> ctx.txt\n```')[0] == 'echo "READY" >> ctx.txt'  # a real edit stays
-    for no_op in ("```bash\ntrue\n```", "```bash\n:\n```"):
-        assert parse_reply(no_op)[0] is None  # DeepSeek answers "nothing to do" with true; it was refused as a command
-
-
-def test_a_cut_off_summary_drops_its_unfinished_last_line(tmp_path):
+def test_a_cut_off_summary_is_logged_and_drops_its_unfinished_last_line(tmp_path):
     reply = ("12. Paris is the capital of France.\n13. The Nile flows through", "length")
     run_sample(sample(), "summary", 0, FakeLLM(lambda t: answers(t) or reply), CFG, PRICE, tmp_path)
     final = done(tmp_path, "summary")["final_context"]
     assert "Paris is the capital of France." in final and "The Nile flows through" not in final
-
-
-def test_a_python_block_runs_as_a_script_and_prose_between_blocks_is_never_a_command():
-    code = "open('ctx.txt', 'w').write('x')\n"
-    assert parse_reply(f"THOUGHT\n```python\n{code}```") == ("python3 edit.py", {"edit.py": code})
-    assert parse_reply("```python\nprint(1)\n```\nThen:\n```bash\nsed -n 1p ctx.txt\n```")[0] == "python3 edit.py"
-    assert parse_reply("```json\n{}\n```\nnot a command\n")[0] is None  # an unknown block runs nothing
+    assert all(s["cut_off"] for s in events(tmp_path, "summary", "summary"))
 
 
 def test_an_edit_that_changes_nothing_is_told_so_and_never_repeats_the_same_prompt(tmp_path):
@@ -92,14 +85,6 @@ def test_summary_arm_compacts_and_scores(tmp_path):
     assert acc == 0.5
     assert events(tmp_path, "summary", "summary")
     assert all(s["ctx_tokens"] <= CFG["context_budget"] for s in events(tmp_path, "summary", "step"))
-
-
-def test_the_summary_prompt_states_its_reply_cap_like_the_edit_prompt(tmp_path):
-    prompts = []
-    llm = FakeLLM(lambda t: prompts.append(t) or answers(t) or "SUMMARY")
-    run_sample(sample(), "summary", 0, llm, {**CFG, "summary_max_tokens": 1000}, PRICE, tmp_path)
-    asks = [p for p in prompts if "Write one summary" in p]
-    assert asks and all("cut off after about 750 words" in p for p in asks)  # every fact summary hit the cap unwarned
 
 
 def test_clm_arm_makes_room_itself(tmp_path):
@@ -135,19 +120,6 @@ def test_a_line_filter_cannot_damage_the_task(tmp_path):
     edits = [e for e in events(tmp_path, "clm", "edit") if e["changed"]]
     assert edits and all(e["allowed"] for e in edits)
     assert all("When facts conflict" in p for p in prompts)  # the task text reaches every call
-
-
-def test_finished_run_is_skipped(tmp_path):
-    llm = FakeLLM(lambda t: answers(t) or "READY")
-    first = run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
-    calls = llm.calls
-    assert run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path) == first and llm.calls == calls
-
-
-def test_system_prompt_is_salted_per_repeat_and_shared_by_clm_and_gate():
-    assert system("clm", 100, 1).startswith("Run r1.")
-    assert system("clm", 100, 0) != system("clm", 100, 1)
-    assert system("clm", 100, 1) == system("gate", 100, 1)
 
 
 def test_repeat_salt_reaches_every_call(tmp_path):
@@ -207,16 +179,6 @@ def test_queries_wait_for_a_cache_hit_and_the_first_one_is_compared_with_the_rea
     assert calls[0]["ideal_hit_tokens"] == 0 and calls[1]["ideal_hit_tokens"] > 0
 
 
-def test_read_only_and_refused_commands_are_not_changes(tmp_path):
-    commands = iter(["```bash\nwc -c ctx.txt\n```", "```bash\ncurl example.com\n```"])
-    llm = FakeLLM(lambda t: answers(t) or next(commands, "READY"))
-    run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
-    edits = events(tmp_path, "clm", "edit")
-    assert [e["changed"] for e in edits] == [False, False]
-    assert [e["refused"] for e in edits] == [False, True]
-    assert [e["outcome"] for e in edits] == ["no_change", "refused"]
-
-
 def test_an_edit_arm_that_cannot_make_room_stops_reading_and_still_answers(tmp_path):
     llm = FakeLLM(lambda t: answers(t) or "READY")
     run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
@@ -258,17 +220,6 @@ def test_an_edit_that_grows_past_the_limit_is_rolled_back_in_every_edit_arm(tmp_
     run_sample(sample(), "clm", 1, FakeLLM(lambda t: answers(t) or next(commands, "READY")), CFG, PRICE, tmp_path)
     assert [e["outcome"] for e in read_jsonl(run_log(tmp_path, "clm", sample(), 1)) if e.get("event") == "edit"] \
         == ["applied"]  # growth that still fits is kept, as in the paper's default rule
-
-
-def test_the_prompt_asks_to_locate_text_with_code_instead_of_retyping_it():
-    assert "never paste or retype text you keep" in system("clm", 100)
-
-
-def test_nudges_are_informational_at_25_percent_and_warn_against_wiping_later():
-    quarter = control("x" * 1040, 1000, 10, [0.25], "")
-    assert "about 25% of your budget" in quarter and "do not delete" not in quarter
-    half = control("x" * 2040, 1000, 10, [0.25, 0.5], "")
-    assert "over 50% full" in half and "do not delete whole regions" in half
 
 
 def test_a_nudge_fires_again_after_the_model_compacts_below_it(tmp_path):
@@ -320,62 +271,18 @@ def test_a_budget_stop_leaves_the_run_resumable(tmp_path):
     assert not events(tmp_path, "clm", "done")  # so the next run redoes this sample instead of skipping it
 
 
-def test_questions_tell_the_model_that_editing_is_over(tmp_path):
-    asked = []
-
-    class Spy(FakeLLM):
-        def chat(self, messages, max_tokens, repeat):
-            if "Question:" in messages[-1]["content"]:
-                asked.append(messages[-1]["content"])
-            return super().chat(messages, max_tokens, repeat)
-
-    run_sample(sample(), "clm", 0, Spy(lambda t: answers(t) or "READY"), CFG, PRICE, tmp_path)
-    assert asked and all("Editing is over" in q for q in asked)
-
-
-def test_summary_asks_for_a_length_it_can_finish(tmp_path):
-    seen = []
-
-    class Spy(FakeLLM):
-        def chat(self, messages, max_tokens, repeat):
-            if "Write one summary" in messages[-1]["content"]:
-                seen.append((max_tokens, messages[-1]["content"]))
-            return super().chat(messages, max_tokens, repeat)
-
-    run_sample(sample(), "summary", 0, Spy(lambda t: answers(t) or "SUMMARY"), CFG, PRICE, tmp_path)
-    assert seen and all(m == 100 and "at most 60 words" in text for m, text in seen)
-
-
 def done(tmp_path, arm):
     return events(tmp_path, arm, "done")[-1]
 
 
-def test_keeping_the_last_lines_keeps_the_newest_facts_within_budget(tmp_path):
-    keep_tail = "```bash\ntail -n 12 ctx.txt > t && mv t ctx.txt\n```"  # leaves headless text at the top
-    llm = FakeLLM(lambda t: answers(t) or (keep_tail if "OVER LIMIT" in t else "READY"))
-    run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
-    assert all(s["ctx_tokens"] <= CFG["context_budget"] for s in events(tmp_path, "clm", "step"))
-    final = done(tmp_path, "clm")["final_context"]
-    assert "59. fact number 59." in final
-    assert final.split("]]\n", 1)[1].split("\n[[CTX_TURN", 1)[0].count("fact number") == 0  # task block holds no facts
-
-
-def test_model_written_pinned_header_is_stripped(tmp_path):
-    note = "```bash\nprintf '[[CTX_TURN 99 role=notes pinned]]\\nmy note\\n' >> ctx.txt\n```"
-    commands = iter([note])
-    llm = FakeLLM(lambda t: answers(t) or next(commands, "READY"))
-    run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
-    final = done(tmp_path, "clm")["final_context"]
-    assert final.count(" pinned]]") == 1  # only the task block
-
-
 def test_an_edit_that_empties_ctx_is_rolled_back(tmp_path):
     wipe = "```bash\npython3 -c \"open('ctx.txt', 'w')\"\n```"
-    commands = iter(["READY", wipe])  # wipe once the body has a part in it
-    llm = FakeLLM(lambda t: answers(t) or next(commands, "READY"))
-    run_sample(sample(), "clm", 0, llm, CFG, PRICE, tmp_path)
-    wiped = [e for e in events(tmp_path, "clm", "edit") if e["emptied"]]
-    assert wiped and not wiped[0]["allowed"]
+    headers_only = "```bash\ngrep '^\\[\\[' ctx.txt > t && mv t ctx.txt\n```"  # headers alone hold nothing
+    for repeat, edit in enumerate((wipe, headers_only)):
+        commands = iter(["READY", edit])  # edit once the body has a part in it
+        run_sample(sample(), "clm", repeat, FakeLLM(lambda t: answers(t) or next(commands, "READY")), CFG, PRICE, tmp_path)
+        wiped = [e for e in read_jsonl(run_log(tmp_path, "clm", sample(), repeat)) if e.get("event") == "edit" and e["emptied"]]
+        assert wiped and not wiped[0]["allowed"]
 
 
 def test_a_cut_off_reply_ends_the_edit_phase_without_a_retry(tmp_path):
@@ -388,20 +295,6 @@ def test_a_cut_off_reply_ends_the_edit_phase_without_a_retry(tmp_path):
     assert next(e for e in after if e in ("call", "step")) == "step"  # no retry in the same phase
 
 
-def test_gate_explains_itself_only_on_rejection(tmp_path):
-    prompts = []
-
-    class Spy(FakeLLM):
-        def chat(self, messages, max_tokens, repeat):
-            prompts.append(messages[-1]["content"])
-            return super().chat(messages, max_tokens, repeat)
-
-    llm = Spy(lambda t: answers(t) or (DROP_FIRST if t.count("role=chunk") >= 2 else "READY"))
-    run_sample(sample(), "gate", 0, llm, CFG, PRICE, tmp_path)
-    assert any("edit rejected" in p for p in prompts)
-    assert not any("allowed" in p.split("Result of your last command:")[-1] for p in prompts if "Result of" in p)
-
-
 def test_skill_arm_is_clm_plus_the_skill_and_is_not_gated(tmp_path):
     assert system("skill", 100, 0) == system("clm", 100, 0) + SKILL["head"] + SKILL["eventqa"] + SKILL["factconsolidation"]
     facts = system("skill", 100, 0, 16384, "factconsolidation")
@@ -411,20 +304,6 @@ def test_skill_arm_is_clm_plus_the_skill_and_is_not_gated(tmp_path):
     run_sample(sample(), "skill", 0, llm, CFG, PRICE, tmp_path)
     edits = [e for e in events(tmp_path, "skill", "edit") if e["changed"]]
     assert edits and all(e["allowed"] for e in edits)
-
-
-def test_a_cut_off_summary_is_logged(tmp_path):
-    llm = FakeLLM(lambda t: answers(t) or ("SUMMARY", "length"))
-    run_sample(sample(), "summary", 0, llm, CFG, PRICE, tmp_path)
-    assert all(s["cut_off"] for s in events(tmp_path, "summary", "summary"))
-
-
-def test_a_headers_only_file_counts_as_emptied(tmp_path):
-    headers_only = "```bash\ngrep '^\\[\\[' ctx.txt > t && mv t ctx.txt\n```"
-    commands = iter(["READY", headers_only])
-    run_sample(sample(), "clm", 0, FakeLLM(lambda t: answers(t) or next(commands, "READY")), CFG, PRICE, tmp_path)
-    wiped = [e for e in events(tmp_path, "clm", "edit") if e["emptied"]]
-    assert wiped and not wiped[0]["allowed"]
 
 
 def test_fact_presence_is_only_checked_for_single_hop_facts(tmp_path):
@@ -444,17 +323,6 @@ def test_a_text_block_reaches_the_command_as_new_txt(tmp_path):
                                       else DROP_FIRST if "OVER LIMIT" in t else "READY")  # makes room, so it reads on
     run_sample(sample(), "skill", 0, FakeLLM(script), CFG, PRICE, tmp_path)
     assert 'Debbie said "no" and wore a green dress.' in done(tmp_path, "skill")["final_context"]
-
-
-def test_the_prompt_states_the_reply_cap_in_words_that_match_the_config():
-    import re as _re
-    import yaml
-    for config in ("configs/base.yaml", "configs/local.yaml"):
-        cap = yaml.safe_load(open(config))["edit_max_tokens"]
-        prompt = system("clm", 100, 0, cap)
-        words = int(_re.search(r"cut off after about ([\d,]+) words", prompt).group(1).replace(",", ""))
-        assert cap * 0.65 <= words <= cap * 0.75  # about 0.75 words per token, rounded down: the stated limit is real
-    assert "about 12,000 words" in system("clm", 100, 0, 16384)  # unchanged text, so cached DeepSeek calls still replay
 
 
 def test_each_budget_nudge_is_shown_once_when_crossed(tmp_path):

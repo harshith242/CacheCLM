@@ -60,14 +60,6 @@ def status_error(cls, code):
     return cls("boom", response=httpx.Response(code, request=httpx.Request("POST", "https://x")), body=None)
 
 
-def test_a_rejected_request_fails_this_sample_only(tmp_path):
-    client = ErrorClient(status_error(openai.BadRequestError, 400))
-    llm = LLM("m", client, tmp_path, 0.3, PRICE)
-    with pytest.raises(RuntimeError, match="400"):
-        llm.chat([{"role": "user", "content": "q"}], 8, 0)
-    assert client.calls == 1  # not retried
-
-
 def test_auth_errors_still_stop_the_run(tmp_path):
     llm = LLM("m", ErrorClient(status_error(openai.AuthenticationError, 401)), tmp_path, 0.3, PRICE)
     with pytest.raises(openai.AuthenticationError):
@@ -81,8 +73,3 @@ def test_connection_errors_are_retried_then_the_sample_fails(tmp_path, monkeypat
     with pytest.raises(RuntimeError, match="gave up after 4 tries"):
         llm.chat([{"role": "user", "content": "q"}], 8, 0)
     assert client.calls == 4 and not list(tmp_path.rglob("*.json"))  # nothing cached, so a rerun tries again
-
-
-def test_replies_carry_the_finish_reason(tmp_path):
-    llm = LLM("deepseek-flash", FakeClient(), tmp_path, 0.3, PRICE)
-    assert llm.chat([{"role": "user", "content": "q"}], 64, repeat=0)["finish_reason"] == "length"

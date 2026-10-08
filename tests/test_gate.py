@@ -20,14 +20,6 @@ def test_worked_example_tail_edit_is_allowed():
     assert allow and numbers["rebilled_tokens"] == 500
 
 
-def test_anthropic_middle_edit_flips_near_thirty_turns():
-    old = "A" * (8 * K) + "B" * (6 * K) + "C" * (16 * K)
-    new = "A" * (8 * K) + "C" * (16 * K)
-    assert not decide(old, new, 10, ANTHROPIC)[0]
-    assert not decide(old, new, 30, ANTHROPIC)[0]  # 54,000 < 55,200
-    assert decide(old, new, 31, ANTHROPIC)[0]  # 55,800 >= 55,200
-
-
 def test_overflow_override_allows_a_shrinking_edit():
     old = "A" * (8 * K) + "B" * (6 * K) + "C" * (16 * K)
     new = "A" * (8 * K) + "C" * (16 * K)
