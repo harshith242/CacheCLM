@@ -193,7 +193,7 @@ Before spending, the same three small tasks ran on a laptop: Qwen3.5 9B on Ollam
 - **Runaway replies:** 2–3 replies per arm ran to the 10,000-token cap, in repetition loops or by copying the book word for word.
 - **Weak ceiling:** even with the whole text it scored only 0.46 on single-hop facts.
 
-The run found five harness bugs, all fixed since and covered by tests (see below). Tables: [`docs/results/local/summary.md`](docs/results/local/summary.md).
+Tables: [`docs/results/local/summary.md`](docs/results/local/summary.md).
 
 ## What we learned
 
